@@ -1,0 +1,17 @@
+{
+	"type" : "effect",
+	"shaders"	:
+	{
+		"vertex"	:	"vertex-factory",
+		"pixel"		:	"HQMG"
+	},
+	"state"		:
+	{
+		"raster"	:
+		{
+			"cull"	:	"none"
+		},
+		"depth-stencil" : "default",
+		"blend" : "default"
+	}
+}
