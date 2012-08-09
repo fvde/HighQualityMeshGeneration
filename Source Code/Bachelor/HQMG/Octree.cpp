@@ -1,5 +1,5 @@
 #include "Octree.h"
-#include "niven.Core.Math.VectorOperators.h"
+#include "niven.Core.Math.ArrayFunctions.h"
 #include "niven.Core.Math.VectorFunctions.h"
 
 Octree::Octree()

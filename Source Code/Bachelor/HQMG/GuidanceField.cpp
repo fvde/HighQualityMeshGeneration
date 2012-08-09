@@ -10,7 +10,7 @@ GuidanceField::GuidanceField(const ShardFileParser::Ptr& sfp, Surface::Ptr s, fl
 
 		Log::Debug("GuidanceField", "Looking for sample points on the surface...");
 
-		randomSeed_ = 1;
+		randomSeed_ = 3;
 		srand(randomSeed_);
 		//srand(time(NULL));
 

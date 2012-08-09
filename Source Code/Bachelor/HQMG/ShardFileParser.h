@@ -17,8 +17,8 @@
 #include "Core/inc/Iterator3D.h"
 #include "Core/inc/math/3dUtility.h"
 #include "Core/inc/math/VectorToString.h"
-#include "Core/inc/MemoryLayout.h"
-#include "niven.Core.Math.VectorOperators.h"
+#include "niven.Core.MemoryLayout3D.h"
+#include "niven.Core.Math.ArrayFunctions.h"
 #include "niven.Core.Math.VectorFunctions.h"
 
 #include "Volume/inc/MarchingCubes.h"

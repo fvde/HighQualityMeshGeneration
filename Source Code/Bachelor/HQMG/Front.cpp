@@ -38,7 +38,6 @@ void Front::Merge(const Front::FrontListIterator& ourMergePoint, Front::FrontLis
 
 	// Add a copy of the other's merge point to us, to complete the circle
 	InsertVertex(copyOther, ourMergePoint, &fm);
-	// TODO?
 	otherMergePoint = PreviousElement(ourMergePoint);
 	// Remove the other front
 	fm.RemoveFront(other.ID);
@@ -73,6 +72,9 @@ void Front::Split(const FrontListIterator& origin, FrontListIterator& intersect,
 	// Copy all items we have found so far
 	f2.Elements.splice(f2.Elements.end(), f1.Elements, cutStart, cutEnd);
 
+	// Now is a good time to adjust the intersect list iterator, before it is lost
+	intersect = f2.Elements.begin();
+
 	// If cutEnd is at the end of our front we still have to add the elements from our beginning until the origin
 	if (cutEnd == Elements.end())
 	{
@@ -97,11 +99,14 @@ void Front::Split(const FrontListIterator& origin, FrontListIterator& intersect,
 
 	// Because splice doesnt take the last element, origin is still in f1, but intersect is in f2
 	// So we need to add a copy of origin to f2
-	intersect = f2.Elements.begin();
 	f2.InsertVertex(copyOrigin, intersect, &fm);
 
 	// And we need to add a copy of intersect to f1
 	f1.InsertVertex(copyIntersect, origin, &fm);
+
+	if(f1.Size() <= 2 || f2.Size() <= 2){
+		int lefail = 0;
+	}
 }
 
 void Front::AddVertex(Vertex v, FrontManager* fm)
@@ -110,6 +115,7 @@ void Front::AddVertex(Vertex v, FrontManager* fm)
 	f.vertex = v;
 	f.front = ID;
 	f.fronts = fm;
+	f.ID = fm->GetFrontID();
 	Elements.push_back(f);
 }
 
@@ -140,10 +146,16 @@ void Front::RemoveElement(FrontListIterator it)
 }
 
 void Front::InsertVertex(Vertex element, FrontListIterator next, FrontManager* fm){
+
+	if(element.Position.X() != element.Position.X() || element.Position.Y() != element.Position.Y()){
+		int superfail = 0;
+	}
+
 	FrontElement f;
 	f.vertex = element;
 	f.front = ID;
 	f.fronts = fm;
+	f.ID = fm->GetFrontID();
 	Elements.insert(next, f);
 }
 

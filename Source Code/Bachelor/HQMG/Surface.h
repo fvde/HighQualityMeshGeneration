@@ -7,7 +7,7 @@
 
 #include "Spline.h"
 #include "ShardFileParser.h"
-#include "Core/inc/MemoryLayout.h"
+#include "niven.Core.MemoryLayout3D.h"
 #include "Core/inc/Iterator3D.h"
 #include "niven.Core.Exception.h"
 #include "niven.Core.Math.Vector.h"
