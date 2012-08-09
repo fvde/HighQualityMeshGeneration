@@ -29,11 +29,12 @@
 #include "niven.Render.VertexBuffer.h"
 #include "niven.Render.VertexFormats.All.h"
 #include "niven.Render.VertexLayout.h"
+#include "niven.Engine.DebugRenderUtility.h"
 
 #include "Core/inc/Iterator3D.h"
 #include "Core/inc/math/3dUtility.h"
 #include "Core/inc/math/VectorToString.h"
-#include "Core/inc/MemoryLayout.h"
+#include "niven.Core.MemoryLayout3D.h"
 
 #include "Volume/inc/MarchingCubes.h"
 
@@ -54,13 +55,35 @@ class HQMG2DApplication : public BaseApplication3D {
 	CMD_DOWN,
 	CMD_LEFT,
 	CMD_RIGHT,
+	CMD_ENTER,
+	CMD_0,
+	CMD_1,
+	CMD_2,
+	};
+
+	enum DrawMode {
+		Mesh = 1,
+		Intersections = 2,
+		All = 0
 	};
 
 private:
 	String volumeName_;
 	float isoValue_;
 	int visibleTriangleCounter_;
+	Render::DebugRenderUtility dru_;
+	MeshExtractor me_;
+	std::vector<Render::VertexFormats::PositionNormalColorUv> vb_;
+	std::vector<Vector3f> vertices_;
+	std::vector<Vector3f> normals_;
+	std::vector<Vector4f> colors_;
+	std::vector<uint32> indices_;
 
+	std::tr1::shared_ptr<niven::Render::IIndexBuffer> indexBuffer_;
+	std::tr1::shared_ptr<niven::Render::IVertexBuffer> vertexBuffer_;
+
+	std::vector<Color3f> debugColors_;
+	DrawMode drawMode_;
 
 public:
 	HQMG2DApplication(const String& volumeName, float isoValue)
@@ -89,6 +112,18 @@ private:
 		commandMapper_.RegisterCommand (CMD_RIGHT, KeyBinding (KeyCodes::Key_Cursor_Right,
 			KeyBindingActivator::Pressed));
 
+		commandMapper_.RegisterCommand (CMD_ENTER, KeyBinding (KeyCodes::Key_Return,
+			KeyBindingActivator::Pressed));
+
+		commandMapper_.RegisterCommand (CMD_0, KeyBinding (KeyCodes::Key_0,
+			KeyBindingActivator::Pressed));
+
+		commandMapper_.RegisterCommand (CMD_1, KeyBinding (KeyCodes::Key_1,
+			KeyBindingActivator::Pressed));
+
+		commandMapper_.RegisterCommand (CMD_2, KeyBinding (KeyCodes::Key_2,
+			KeyBindingActivator::Pressed));
+
 		camera_->GetFrustum().SetPerspectiveProjection(
 			Degree (75.0f),
 			renderWindow_->GetAspectRatio(),
@@ -100,13 +135,16 @@ private:
 
 		camera_->SetMoveSpeedMultiplier(10.0f);
 
+		srand(time(NULL));
+		visibleTriangleCounter_ = 1;
+		drawMode_ = DrawMode::All;
+
 		effectManager_.Initialize(renderSystem_.get(), &effectLoader_);
 		
 		effect_ = effectManager_.GetEffect ("HQMGDefault", 
 			Render::VertexFormats::PositionNormalColorUv::GetId ());
 		
 		vertexLayout_ = renderSystem_->CreateVertexLayout (
-			Render::VertexFormats::PositionNormalColorUv::GetVertexLayoutElementCount (),
 			Render::VertexFormats::PositionNormalColorUv::GetVertexLayout (),
 			effect_->GetVertexShaderProgram ());
 
@@ -114,50 +152,44 @@ private:
 		ShardFileParser::Ptr sfp = cpp0x::make_shared<ShardFileParser> (volumeName_, isoValue_);
 
 		Log::Debug("High Quality Mesh Generation", "Starting triangulation...");
-		MeshExtractor me(sfp, isoValue_, 0.3f, 1.2f);
-
-		std::vector<Vector3f> vertices;
-		std::vector<Vector3f> normals;
-		std::vector<Vector4f> colors; // not used atm
-		std::vector<uint32> indices;
+		me_ = MeshExtractor(sfp, isoValue_, 0.3f, 1.2f);
+		me_.Setup();
+		Log::Debug("High Quality Mesh Generation", "Ready for triangulation!");
 
 
-		me.TriangulateShardFile(vertices, normals, colors, indices);
-		visibleTriangleCounter_ = 1;
+		indexBuffer_ = renderSystem_->Wrap (renderSystem_->CreateIndexBuffer (
+		IndexBufferFormat::UInt_32,
+		numeric_cast<int> (4242424),
+		Render::ResourceUsage::Dynamic));
 
-		if (indices.empty () || vertices.empty() || normals.empty() || colors.empty())
-				{
-					throw Exception("No vertices or indices or normals or colors where created!", "Check the implementation of the mesh extraction algorithm for more information.");
-				}
+		vertexBuffer_ = renderSystem_->Wrap (renderSystem_->CreateVertexBuffer (
+		sizeof (Render::VertexFormats::PositionNormalColorUv),
+		numeric_cast<int> (4242424),
+		Render::ResourceUsage::Dynamic));
 
-		Log::Debug("High Quality Mesh Generation", "Completed triangulation!");
+		mesh_.vertexBuffer = vertexBuffer_;
+		mesh_.indexBuffer = indexBuffer_;
 
-		auto indexBuffer = renderSystem_->Wrap (renderSystem_->CreateIndexBuffer (
-				IndexBufferFormat::UInt_32,
-				numeric_cast<int> (indices.size ()),
-				Render::ResourceUsage::Static,
-				&indices [0]));
+		debugColors_.resize(15);
+		// 0-8 fronts.
+		debugColors_[0] = Color3f(0, 1.0f, 0);
+		debugColors_[1] = Color3f(0, 1.0f, 1.0f);
+		debugColors_[2] = Color3f(0, 0, 1.0f);
+		debugColors_[3] = Color3f(0, 0.25f, 0.25f);
+		debugColors_[4] = Color3f(0, 0.25f, 0);
+		debugColors_[5] = Color3f(0, 0, 0.25f);
+		debugColors_[6] = Color3f(0, 0.75f, 0);
+		debugColors_[7] = Color3f(0, 0, 0.75f);
+		debugColors_[8] = Color3f(0, 0.25f, 0.75f);
+		// 9: Last Attempt triangle pre merge/split 10: Last Attempt triangle after split/merge
+		debugColors_[9] = Color3f(1.0f, 0, 0);
+		debugColors_[10] = Color3f(1.0f, 1.0f, 0);
+		// 11: Edges in range. 12: intersection edges, 13: intersection
+		debugColors_[11] = Color3f(1.0f, 0, 0);
+		debugColors_[12] = Color3f(0, 1.0f, 0);
+		debugColors_[13] = Color3f(0, 0, 1.0f);
 
-		std::vector<Render::VertexFormats::PositionNormalColorUv> vb (vertices.size ());
-		
-		for (int i = 0; i < static_cast<int>(vertices.size ()); ++i)
-			{
-				vb[i] = (Render::VertexFormats::PositionNormalColorUv::Create (
-					vertices [i], normals[i], colors[i], Vector2f(0,0)));
-			}
-		
 
-		auto vertexBuffer = renderSystem_->Wrap (renderSystem_->CreateVertexBuffer (
-				sizeof (Render::VertexFormats::PositionNormalColorUv),
-				numeric_cast<int> (vb.size ()),
-				Render::ResourceUsage::Static,
-				&vb[0]));
-				
-
-		mesh_.vertexCount = numeric_cast<int> (vertices.size ());
-		mesh_.indexCount = numeric_cast<int> (indices.size ());
-		mesh_.vertexBuffer = vertexBuffer;
-		mesh_.indexBuffer = indexBuffer;
 	}
 	void HandleCommand(const CommandID id, const InputContext *context)
 	{
@@ -185,7 +217,125 @@ private:
 			}
 			break;
 			}
+		case CMD_ENTER:{
+			ExecuteNextStep();
+			break;
+			}
+		case CMD_0:{
+			drawMode_ = DrawMode::All;
+			dru_.Clear();
+			AddMeshDebugInformation();
+			AddIntersectionDebugInformation();
+			break;
+			}
+		case CMD_1:{
+			drawMode_ = DrawMode::Mesh;
+			dru_.Clear();
+			AddMeshDebugInformation();
+			break;
+			}
+		case CMD_2:{
+			drawMode_ = DrawMode::Intersections;
+			dru_.Clear();
+			AddIntersectionDebugInformation();
+			break;
+			}
 		}
+	}
+
+	void ExecuteNextStep(){
+
+		int previousSize = vertices_.size();
+
+		me_.TriangulateShardFile(vertices_, normals_, colors_, indices_, 1);
+
+		vb_.resize(vertices_.size ());
+
+		visibleTriangleCounter_ = vertices_.size () / 3;
+
+		for (int i = previousSize; i < static_cast<int>(vertices_.size ()); ++i)
+			{
+				vb_[i] = (Render::VertexFormats::PositionNormalColorUv::Create (
+					vertices_ [i], normals_[i], colors_[i], Vector2f(0,0)));
+			}
+		
+		
+		void* d;
+		vertexBuffer_->Map (renderContext_, &d, Render::ResourceAccessMode::Cpu_Write,
+			Render::ResourceMapFlags::Discard);
+		::memcpy (d, vb_.data (), vb_.size () * sizeof (Render::VertexFormats::PositionNormalColorUv));
+		vertexBuffer_->Unmap (renderContext_);
+
+		void* t;
+		indexBuffer_->Map (renderContext_, &t, Render::ResourceAccessMode::Cpu_Write,
+			Render::ResourceMapFlags::Discard);
+		::memcpy (t, indices_.data (), indices_.size () * sizeof (IndexBufferFormat::UInt_32));
+		indexBuffer_->Unmap (renderContext_);
+
+		mesh_.vertexCount = numeric_cast<int> (vertices_.size ());
+		mesh_.indexCount = numeric_cast<int> (indices_.size ());
+
+		dru_.Clear();
+		switch (drawMode_) {
+			case DrawMode::All:{
+				AddMeshDebugInformation();
+				AddIntersectionDebugInformation();
+				break;
+				}
+			case DrawMode::Mesh:{
+				AddMeshDebugInformation();
+				break;
+				}
+			case DrawMode::Intersections:{
+				AddIntersectionDebugInformation();
+				break;
+				}
+		}
+		
+	}
+
+	void AddIntersectionDebugInformation() {
+		for (auto it = me_.LastEdgesInRange.begin(); it != me_.LastEdgesInRange.end(); it++){
+			dru_.AddLine(it->v1, it->v2, debugColors_[11]);
+		}
+
+		for (auto it = me_.LastIntersectionEdges.begin(); it != me_.LastIntersectionEdges.end(); it++){
+			dru_.AddLine(it->v1, it->v2, debugColors_[12]);
+		}
+
+		for (auto it = me_.Intersections.begin(); it != me_.Intersections.end(); it++){
+			dru_.AddCross((*it), debugColors_[13], 0.02f);
+		}
+	}
+
+	void AddMeshDebugInformation() {
+
+		// Draw fronts
+		for (int outer = 0; outer < me_.DebugFront.size(); outer++){
+			for (int inner = 0; inner < me_.DebugFront[outer].size() - 1; inner++){
+				dru_.AddLine(me_.DebugFront[outer][inner], me_.DebugFront[outer][inner + 1], debugColors_[Min(8, outer)]);
+			}
+			dru_.AddLine(me_.DebugFront[outer][me_.DebugFront[outer].size() - 1], me_.DebugFront[outer][0], debugColors_[Min(8, outer)]);
+		}
+
+		// Draw last triangle pre and after operations
+		// Pre:
+		dru_.AddLine(me_.PreOrigin, me_.PreNeighbor, debugColors_[9]);
+		dru_.AddLine(me_.PreNeighbor, me_.PreAttempt, debugColors_[9]);
+		dru_.AddLine(me_.PreAttempt, me_.PreOrigin, debugColors_[9]);
+
+		dru_.AddCross(me_.PreOrigin, debugColors_[9], 0.02f);
+		dru_.AddCross(me_.PreAttempt, debugColors_[9], 0.02f);
+		dru_.AddCross(me_.PreNeighbor, debugColors_[9], 0.02f);
+
+		// Post:
+		dru_.AddLine(me_.PostOrigin, me_.PostAttempt, debugColors_[10]);
+		dru_.AddLine(me_.PostNeighbor, me_.PostAttempt, debugColors_[10]);
+		dru_.AddLine(me_.PostNeighbor, me_.PostOrigin, debugColors_[10]);
+
+		dru_.AddCross(me_.PostOrigin, debugColors_[10], 0.02f);
+		dru_.AddCross(me_.PostAttempt, debugColors_[10], 0.02f);
+		dru_.AddCross(me_.PostNeighbor, debugColors_[10], 0.02f);
 	}
 
 	void ShutdownImpl() 
@@ -210,10 +360,10 @@ private:
 		dic.type = PrimitiveType::Triangle_List;
 		dic.indexCount = visibleTriangleCounter_ * 3;
 		dic.vertexCount = visibleTriangleCounter_ * 3;
-
 		effect_->Bind (renderContext_);
 		renderContext_->Draw(dic);
 		effect_->Unbind (renderContext_);
+		renderSystem_->DebugDrawLines(dru_.GetLineSegments());
 	}
 
 	String GetMainWindowName () const

@@ -8,58 +8,66 @@ MeshExtractor::MeshExtractor(const ShardFileParser::Ptr& sfp, float isoValue, fl
 
 		surface_  = SplineSurface::Ptr (new SplineSurface(sfp, isoValue));
 		guidanceField_ = GuidanceField::Ptr ( new GuidanceField(sfp, surface_, p, n));
+		indiceCounter_ = 0;
+		debugMaxTriangleNumber_ = 75;
+		debugTriangleCounter_ = debugMaxTriangleNumber_;
+		triangleSize_ = 0.5f;
+		totalSteps_ = 0;
 	}
 
-
-
-void MeshExtractor::TriangulateShardFile(std::vector<Vector3f>& vertices, std::vector<Vector3f>& normals, std::vector<Vector4f>& colors, std::vector<uint32>& indices){
-
-	Log::Debug("MeshExtractor", "Starting the advancing front algorithm...");
-
-	float triangleSize = 0.5f;
-	int indiceCounter = indices.size();
-	int debugMaxTriangleNumber = 100;
-	int debugTriangleCounter = debugMaxTriangleNumber;
-
+void MeshExtractor::Setup(){	
 	// TODO:: Find more/better seeds
 	Vector3f seed = guidanceField_->GetSamples()[0].position;
 
 	// Find a starting front
 	GetFrontFromSeed(seed, frontManager_);
+}
+
+
+void MeshExtractor::TriangulateShardFile(std::vector<Vector3f>& vertices, std::vector<Vector3f>& normals, std::vector<Vector4f>& colors, std::vector<uint32>& indices, int steps){
+
+	totalSteps_ += steps;
+
+	char buffer[200];
+	sprintf(buffer, "Executing %i steps. Total number of steps is %i", steps, totalSteps_);
+	Log::Debug("MeshExtractor", buffer);
 
 	// Vector for finished triangles
 	std::vector<Triangle> triangles;
 
 	// Start the algorithm
-	while (frontManager_.Count() > 0){
-
+	while (frontManager_.Count() > 0 && (steps > 0)){
+		steps--;
 		Front& currentFront = frontManager_.GetRandomFront();
 		int currentFrontID = currentFront.ID;
 		Front::FrontListIterator currentFrontElementIterator = currentFront.Random();
 
 		// If this front has only three elements it is a finished triangle
 		if(currentFront.Size() == 3 && !currentFront.SeedFront){
-			// TODO Check if its a seed triangle
 
-			Vertex v1 = currentFront.Elements.front().vertex;
-			currentFront.Elements.pop_front();
-
-			Vertex v2 = currentFront.Elements.front().vertex;
-			currentFront.Elements.pop_front();
-
-			Vertex v3 = currentFront.Elements.front().vertex;
-
-			triangles.push_back(CreateTriangle(v1, v2, v3));
+			triangles.push_back(CreateTriangle(currentFront));
 
 			frontManager_.RemoveFront(currentFrontID);
+
+			if(GiveDebugFeedback(debugTriangleCounter_, debugMaxTriangleNumber_)){
+				break;	
+			}
+
 			continue;
 		}	
 
 		// Attempt to grow a triangle
-		//Vertex attemptVertex = GrowVertex(currentFrontElementIterator->vertex, currentFrontElementIterator->front->PreviousElement(currentFrontElementIterator)->vertex);
 		Vertex& v1 = currentFrontElementIterator->vertex;
 		Vertex& v2 = currentFront.PreviousElement(currentFrontElementIterator)->vertex;
 		Vertex attemptVertex;
+
+		// Debug information
+		PreOrigin = v1.Position;
+		PreNeighbor = v2.Position;
+		PreAttempt = v1.Position;
+		PostOrigin = v1.Position;
+		PostNeighbor = v2.Position;
+		PostAttempt = v1.Position;
 
 		if (!GrowVertex(v1, v2, attemptVertex)){
 			Log::Debug("MeshExtractor", "Vertex creation failed!");
@@ -71,11 +79,14 @@ void MeshExtractor::TriangulateShardFile(std::vector<Vector3f>& vertices, std::v
 			continue;
 		}
 
+		// Update debug information
+		PreAttempt = attemptVertex.Position;
+		PostAttempt = attemptVertex.Position;
+
 		// Declare for identification of interfering fronts (by reference)
 		Front::FrontListIterator intersectingFrontElementIterator;
-		bool selfIntersection = false;
 
-		if(!CheckFrontInterference(currentFront, attemptVertex, currentFrontElementIterator, intersectingFrontElementIterator, selfIntersection))
+		if(!CheckFrontInterference(currentFront, attemptVertex, currentFrontElementIterator, intersectingFrontElementIterator))
 		{
 			// Create the new triangle
 			triangles.push_back(CreateTriangle(	v1, 
@@ -83,22 +94,17 @@ void MeshExtractor::TriangulateShardFile(std::vector<Vector3f>& vertices, std::v
 												attemptVertex));
 			currentFront.InsertVertex(attemptVertex, currentFrontElementIterator, &frontManager_);
 
-			// Set the seed front back to a anormal front after it has grown 4 vertices
+			// Set the seed front back to a a normal front after it has grown 4 vertices
 			if(currentFront.Size() > 3 && currentFront.SeedFront){
 				currentFront.SeedFront = false;
 			}
 
-			if(GiveDebugFeedback(debugTriangleCounter, debugMaxTriangleNumber)){
+			if(GiveDebugFeedback(debugTriangleCounter_, debugMaxTriangleNumber_)){
 				break;	
 			}
 		} 
 		else 
 		{
-			if(selfIntersection){
-				// Don't create a triangle here, since it would only be a line or a point. Skip and hope that this triangle will be created from another position with better shape.
-				continue;
-			}
-
 			if(currentFrontID == intersectingFrontElementIterator->front){
 				// Split fronts ( -> Creates a new front)
 				currentFront.Split(currentFrontElementIterator, intersectingFrontElementIterator, frontManager_);
@@ -107,36 +113,37 @@ void MeshExtractor::TriangulateShardFile(std::vector<Vector3f>& vertices, std::v
 				currentFront.Merge(currentFrontElementIterator, intersectingFrontElementIterator, frontManager_);
 			}
 
-			// Merging and splitting also results in a 'connection' triangle which we can add to our triangulation
-			triangles.push_back(CreateTriangle(	v1, 
-												v2,
-												intersectingFrontElementIterator->vertex));
-			if(GiveDebugFeedback(debugTriangleCounter, debugMaxTriangleNumber)){
-				break;	
-			}
+			// Debug information
+			/*
+			PostOrigin = currentFrontElementIterator->vertex.Position;
+			PostNeighbor = currentFront.PreviousElement(;
+			PostAttempt = intersectingFrontElementIterator->vertex.Position;
+			*/
 		}
 	}
 
-	char buffer[200];
-	sprintf(buffer, "Advancing front algorithm completed. Generated %i triangles.", triangles.size());
-	Log::Debug("MeshExtractor", buffer);
+	char buffer2[200];
+	sprintf(buffer2, "Steps completed. Generated %i triangles.", triangles.size());
+	Log::Debug("MeshExtractor", buffer2);
+
+	ParseFrontManager();
 
 	// Finally evaluate the generated triangles
 	for (auto it = triangles.begin(); it != triangles.end(); it++){
 		vertices.push_back(it->v1.Position);
 		normals.push_back(it->v1.Normal);
 		colors.push_back(it->v1.Color);
-		indices.push_back(indiceCounter++);
+		indices.push_back(indiceCounter_++);
 
 		vertices.push_back(it->v2.Position);
 		normals.push_back(it->v2.Normal);
 		colors.push_back(it->v1.Color);
-		indices.push_back(indiceCounter++);
+		indices.push_back(indiceCounter_++);
 
 		vertices.push_back(it->v3.Position);
 		normals.push_back(it->v3.Normal);
 		colors.push_back(it->v1.Color);
-		indices.push_back(indiceCounter++);	
+		indices.push_back(indiceCounter_++);	
 	}
 }
 
@@ -164,6 +171,11 @@ void MeshExtractor::GetFrontFromSeed(Vector3f seed, FrontManager& fm)
 // Grow vertices per definition to the left using previous element
 bool MeshExtractor::GrowVertex(Vertex& v1, Vertex& v2, Vertex& vNew)
 {
+	// TODO
+	if (v1.Position == v2.Position){
+		return false;
+	}
+
 	// Check if we calculated our vertices already
 
 	if(v1.IdealEdgeLength == std::numeric_limits<float>::infinity()){
@@ -184,7 +196,7 @@ bool MeshExtractor::GrowVertex(Vertex& v1, Vertex& v2, Vertex& vNew)
 	const float distance = Length(edgeDir);
 
 	if(distance > (v1.IdealEdgeLength + v2.IdealEdgeLength) || distance < abs(v1.IdealEdgeLength - v2.IdealEdgeLength)){
-		// No solution
+		// No solution: Circles don't intersect
 		return false;
 	}
 
@@ -212,7 +224,9 @@ bool MeshExtractor::GrowVertex(Vertex& v1, Vertex& v2, Vertex& vNew)
 
 	// Set the position
 	vNew.Position = v1.Position + (edgeDir * a) + (vertexDir * height);
-	vNew.Normal = edgeNormal;
+	//vNew.Normal = edgeNormal;
+
+	//NIV_DEBUGBREAK_IF_TRUE(vNew.Position.X() != vNew.Position.X());
 
 	return true;
 }
@@ -263,7 +277,7 @@ bool MeshExtractor::ProjectVertexOnSurface(Vertex& v){
 	return true;
 }
 
-bool MeshExtractor::CheckFrontInterference(Front& current, Vertex newVertex, Front::FrontListIterator& currentFrontElementIterator, Front::FrontListIterator& interferingFrontElementIterator, bool& selfIntersection){
+bool MeshExtractor::CheckFrontInterference(Front& current, Vertex newVertex, Front::FrontListIterator& currentFrontElementIterator, Front::FrontListIterator& interferingFrontElementIterator){
 
 	Vector3f originOffset = newVertex.Position;
 
@@ -271,14 +285,18 @@ bool MeshExtractor::CheckFrontInterference(Front& current, Vertex newVertex, Fro
 	Edge edge1;
 	edge1.front = current.ID;
 	edge1.v1 = newVertex.Position;
-	edge1.v2 = currentFrontElementIterator->vertex.Position;
+	edge1.frontIterator2 = currentFrontElementIterator;
+	edge1.v2 = edge1.frontIterator2->vertex.Position;
 
 	Edge edge2;
 	edge2.front = current.ID;
 	edge2.v1 = newVertex.Position;
-	edge2.v2 = current.PreviousElement(currentFrontElementIterator)->vertex.Position;
+	edge2.frontIterator2 = current.PreviousElement(currentFrontElementIterator);
+	edge2.v2 = edge2.frontIterator2->vertex.Position;
 
-	std::vector<MeshExtractor::Edge> edges = GetEdgesInRange(newVertex, edge1.v2, edge2.v2);
+	// The edges that could have an impact on us, are all but the one between curent and Previous(current). edge1 and edge2 are local variables right now, so they can't be found.
+	Edge edgeCurrentPrevious(currentFrontElementIterator, current.PreviousElement(currentFrontElementIterator));
+	std::vector<MeshExtractor::Edge> edges = GetEdgesInRange(newVertex, edgeCurrentPrevious);
 
 	// No interference if no elemnts are in range
 	if (edges.size() == 0){
@@ -308,6 +326,12 @@ bool MeshExtractor::CheckFrontInterference(Front& current, Vertex newVertex, Fro
 	// Translate and transform
 	TransformEdge(edge1, -originOffset, coordinateSystem);
 	TransformEdge(edge2, -originOffset, coordinateSystem);
+	TransformEdge(edgeCurrentPrevious, -originOffset, coordinateSystem);
+
+	// For debugging
+	LastEdgesInRange.clear();
+	LastIntersectionEdges.clear();
+	Intersections.clear();
 
 	std::vector<MeshExtractor::Intersection> potentialIntersections;
 	MeshExtractor::Intersection currentIntersection;
@@ -315,54 +339,43 @@ bool MeshExtractor::CheckFrontInterference(Front& current, Vertex newVertex, Fro
 	// Other elements
 	for (auto it = edges.begin(); it != edges.end(); it++){
 		TransformEdge((*it), -originOffset, coordinateSystem);
+		LastEdgesInRange.push_back((*it));
+			
+		if ((*it).v2.X() != (*it).v2.X() || (*it).v2.Y() != (*it).v2.Y()){
+			int fail = 0;
+		}
 
 		// From now on we ignore the z component
 		// Test each edge against egde1 and edge2
 
 		if (GetIntersection(edge1, *it, currentIntersection)){
 			potentialIntersections.push_back(currentIntersection);
+			LastIntersectionEdges.push_back(currentIntersection.edge);
+			Intersections.push_back(Vector3f(currentIntersection.x, currentIntersection.y, 0)); 
 		}
 
 		if (GetIntersection(edge2, *it, currentIntersection)){
 			potentialIntersections.push_back(currentIntersection);
+			LastIntersectionEdges.push_back(currentIntersection.edge);
+			Intersections.push_back(Vector3f(currentIntersection.x, currentIntersection.y, 0)); 
 		}
 	}
 
-	// Finally check which of the found intersections is closest to the original edge
+	// Return if no intersections were found
 	if(potentialIntersections.size() == 0){
 		return false;
-	} else if (potentialIntersections.size() == 1){
-		interferingFrontElementIterator = potentialIntersections[0].frontIterator;
-	} else {
-
-		// Initialize
-		interferingFrontElementIterator = potentialIntersections[0].frontIterator;
-		float currentMinimalDistance = std::numeric_limits<float>::infinity();
-
-		for (auto it = potentialIntersections.begin(); it != potentialIntersections.end(); it++){
-			
-			const Vector2f i = Vector2f(it->x, it->y);
-
-			// Note that edge1 and edge2 are transformed into out 2D world.
-			float accumulatedDistance = Length(i - Vector2f(edge1.v2.X(), edge1.v2.Y())) + Length(i - Vector2f(edge2.v2.X(), edge2.v2.Y()));
-
-			if(accumulatedDistance < currentMinimalDistance && !IsCloseSelfIntersection(it->frontIterator, currentFrontElementIterator)){
-				currentMinimalDistance = accumulatedDistance;
-				interferingFrontElementIterator = it->frontIterator;
-			}
-		}
 	}
 
-	// Check if we are not intersecting with ourselves or an adjacent front element
-	if (IsCloseSelfIntersection(interferingFrontElementIterator, currentFrontElementIterator)){
-			// Bad triangle
-			selfIntersection = true;
+	// Now we only have to find the intersections that fits best. Its still possible to discard all intersections, if they are just
+	// intersections with our original edge
+	if (!FindBestIntersection(potentialIntersections, edgeCurrentPrevious, interferingFrontElementIterator, currentFrontElementIterator)){
+		return false;
 	}
 
 	return true;
 }
 
-std::vector<MeshExtractor::Edge> MeshExtractor::GetEdgesInRange(Vertex& v, const Vector3f& v1, const Vector3f& v2){
+std::vector<MeshExtractor::Edge> MeshExtractor::GetEdgesInRange(const Vertex& v, const MeshExtractor::Edge& edgeCurrentPrevious){
 	std::vector<MeshExtractor::Edge> elementsInRange;
 
 	// Ideal edge length has ben calculated before. Factor 2 because vertices could be outside the ideal length sphere and still intersect
@@ -374,19 +387,10 @@ std::vector<MeshExtractor::Edge> MeshExtractor::GetEdgesInRange(Vertex& v, const
 
 		for (auto frontElementIt = f.Elements.begin(); frontElementIt != f.Elements.end(); frontElementIt++){
 			if (Length(v.Position - frontElementIt->vertex.Position) < range && 
-				frontElementIt->vertex.Position != v.Position &&
-				frontElementIt->vertex.Position != v1 &&
-				frontElementIt->vertex.Position != v2 &&
-				f.PreviousElement(frontElementIt)->vertex.Position != v.Position &&
-				f.PreviousElement(frontElementIt)->vertex.Position != v1 &&
-				f.PreviousElement(frontElementIt)->vertex.Position != v2){
+				frontElementIt->ID != edgeCurrentPrevious.frontIterator1->ID &&
+				f.PreviousElement(frontElementIt)->ID != edgeCurrentPrevious.frontIterator2->ID){
 				// Make a copy and push back
-				MeshExtractor::Edge e;
-				e.front = frontIDIt->first;
-				e.frontIterator1 = frontElementIt;
-				e.frontIterator2 = f.PreviousElement(frontElementIt);
-				e.v1 = e.frontIterator1->vertex.Position;
-				e.v2 = e.frontIterator2->vertex.Position;
+				MeshExtractor::Edge e(frontElementIt, f.PreviousElement(frontElementIt));
 				elementsInRange.push_back(e);
 			}
 		}
@@ -425,28 +429,85 @@ bool MeshExtractor::GetIntersection(const MeshExtractor::Edge& e1, const MeshExt
 
 	intersection.x = x;
 	intersection.y = y;
-	
-	// Find the closer front element // TODO: Might be the other way around?
-	if(Length(Vector2f(x, y) - Vector2f(x3, y3)) < Length(Vector2f(x, y) - Vector2f(x4, y4))){
-		intersection.frontIterator = e2.frontIterator1;
-	} else {
-		intersection.frontIterator = e2.frontIterator2;
-	}
+	intersection.edge = e2;
+	intersection.origin = e1.frontIterator2;
 
 	return true;
 }
 
-bool MeshExtractor::IsCloseSelfIntersection(Front::FrontListIterator& interfering, Front::FrontListIterator& current){
-	Front& f1 = frontManager_[current->front];
-	Front& f2 = frontManager_[interfering->front];
+bool MeshExtractor::FindBestIntersection(const std::vector<MeshExtractor::Intersection>& intersections, const MeshExtractor::Edge& originalEdge, Front::FrontListIterator& bestIntersection, Front::FrontListIterator& bestOrigin){
+
+	// We now have a list of edges interfering with us.
+	// v1 := originalEdge.v1 v2:= originalEdge.v2
+	// The final intersecion should fullfill the following criteria:
+	// 1) It shouldn't be an intersection with v1 or v2
+	// 2) Its distance to v1 and v2 should be minimal.
+	// 3) The edges between the intersection vertex and v1 and v2 should not lead to new intersections.
+	// 3.1) This should be guaranteed by 2) maybe /TODO
+
+	const Vector2f v1(originalEdge.v1.X(), originalEdge.v1.Y());
+	const Vector2f v2(originalEdge.v2.X(), originalEdge.v2.Y());
+	bool foundIntersection = false;
+
+	float currentMinimalDistance = std::numeric_limits<float>::infinity();
+
+	for (auto it = intersections.begin(); it != intersections.end(); it++){
+			
+		// Current intersection
+		const Vector2f intersection(it->x, it->y);
+		const Vector2f intersectionv1(it->edge.v1.X(), it->edge.v1.Y());
+		const Vector2f intersectionv2(it->edge.v2.X(), it->edge.v2.Y());
+
+		// First test 1)
+		if (intersection == v1 || intersection == v2){
+			continue;
+		}
+
+		// Note that now we already MUST (and will) choose an intersection
+		foundIntersection = true;
+
+		// Note that originalEdge has been transformed into our 2D world.
+		float accumulatedDistance = Length(intersection - v1) + Length(intersection - v2);
+
+		if (accumulatedDistance < currentMinimalDistance){
+			// This intersection is a minimal candidate. 
+			currentMinimalDistance = accumulatedDistance;
+			// Find the vertex of the edge that is not v1 or v2 and closest to the intersection
+			if (Length(intersectionv1 - intersection) < Length(intersectionv1 - intersection)){
+				if (it->edge.frontIterator1->vertex.Position != originalEdge.frontIterator1->vertex.Position && it->edge.frontIterator1->vertex.Position != originalEdge.frontIterator2->vertex.Position){
+					bestIntersection = it->edge.frontIterator1;
+				} else {
+					bestIntersection = it->edge.frontIterator2;
+				} 
+			} else {
+				if (it->edge.frontIterator2->vertex.Position != originalEdge.frontIterator1->vertex.Position && it->edge.frontIterator2->vertex.Position != originalEdge.frontIterator2->vertex.Position){
+					bestIntersection = it->edge.frontIterator2;
+				} else {
+					bestIntersection = it->edge.frontIterator1;
+				} 
+			}
+
+			bestOrigin = it->origin;
+
+			// Only reason not to use this origin would be, if origin and intersection were direct neighbors
+			if (bestOrigin->front == bestIntersection->front){
+				Front& f = frontManager_[bestOrigin->front];
+
+				if (f.PreviousElement(bestOrigin)->ID == bestIntersection->ID){
+					bestOrigin = f.NextElement(bestOrigin);
+				}
+
+				if (f.NextElement(bestOrigin)->ID == bestIntersection->ID){
+					bestOrigin = f.PreviousElement(bestOrigin);
+				}
+			}
+		}
 	
-	if (f1.ID != f2.ID){
-		return false;
+		PostOrigin = bestOrigin->vertex.Position;
+		PostAttempt = bestIntersection->vertex.Position;
 	}
 
-	return (interfering == current ||
-		interfering == f1.PreviousElement(current) ||
-		interfering == f1.NextElement(current));
+	return foundIntersection;
 }
 
 void MeshExtractor::TransformEdge(MeshExtractor::Edge& edge, const Vector3f& translation, const Matrix3f& transformation){
@@ -457,7 +518,20 @@ void MeshExtractor::TransformEdge(MeshExtractor::Edge& edge, const Vector3f& tra
 }
 
 
-MeshExtractor::Triangle MeshExtractor::CreateTriangle(Vertex v1, Vertex v2, Vertex v3){
+MeshExtractor::Triangle MeshExtractor::CreateTriangle(Front& f){
+
+	Vertex v1 = f.Elements.front().vertex;
+	f.Elements.pop_front();
+
+	Vertex v2 = f.Elements.front().vertex;
+	f.Elements.pop_front();
+
+	Vertex v3 = f.Elements.front().vertex;
+
+	return CreateTriangle(v1, v2, v3);
+}
+
+MeshExtractor::Triangle MeshExtractor::CreateTriangle(Vertex& v1, Vertex& v2, Vertex& v3){	
 	Triangle t;
 	t.v1 = v1;
 	t.v2 = v2;
@@ -479,4 +553,19 @@ bool MeshExtractor::GiveDebugFeedback(int& debugTriangleCounter, int max){
 		} else {
 			return false;
 		}
+}
+
+void MeshExtractor::ParseFrontManager(){
+	DebugFront.clear();
+
+	for (auto frontIDIt = frontManager_.FrontsBegin(); frontIDIt != frontManager_.FrontsEnd(); frontIDIt++){
+		Front& f = frontIDIt->second;
+		std::vector<Vector3f> front;
+
+		for (auto frontElementIt = f.Elements.begin(); frontElementIt != f.Elements.end(); frontElementIt++){
+			front.push_back(frontElementIt->vertex.Position);
+		}
+
+		DebugFront.push_back(front);
+	}
 }

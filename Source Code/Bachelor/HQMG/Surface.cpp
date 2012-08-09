@@ -93,7 +93,7 @@ SplineSurface::SplineSurface(const ShardFileParser::Ptr& sfp, float isovalue)
 				&& *std::max_element(innerSamples.begin(), innerSamples.begin() + innerSamples.size()) >= isovalue_){
 				// Create a spline, in this case CatmullRom
 				splines_[layout_(it)] = CatmullRomSpline(samples);
-				isoSurfaceSplines_.push_back(std::pair<Vector3i, Spline*>(Vector3f(it), &splines_[layout_(it)]));
+				isoSurfaceSplines_.push_back(std::pair<Vector3i, Spline*>(it.ToVector(), &splines_[layout_(it)]));
 			} else {
 				splines_[layout_(it)] = EmptySpline();
 			}

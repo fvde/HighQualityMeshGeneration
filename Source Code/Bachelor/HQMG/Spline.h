@@ -9,8 +9,8 @@
 #include <vector>
 #include "MultivariatePolynom.h"
 #include "niven.Core.Math.Matrix.h"
-#include "niven.Core.Math.MatrixOperators.h"
-#include "Core/inc/MemoryLayout.h"
+#include "niven.Core.Math.MatrixFunctions.h"
+#include "niven.Core.MemoryLayout3D.h"
 #include "Core/inc/Iterator3D.h"
 
 class Spline {

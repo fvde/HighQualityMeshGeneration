@@ -26,6 +26,7 @@ public:
 		Vertex vertex;
 		FrontManager* fronts;
 		int	front;
+		int ID;
 	};
 
 public:
@@ -59,6 +60,7 @@ struct FrontManager
 {
 	FrontManager() { 
 		currentlyHighestID = -1;
+		currentlyHighestFrontElementID = -1;
 		srand(0);
 	};
 
@@ -97,6 +99,11 @@ struct FrontManager
 		return fronts[0];
 	}
 
+	int GetFrontID(){
+		currentlyHighestFrontElementID++;
+		return currentlyHighestFrontElementID;
+	}
+
 	Front& operator [] (int id)
 	{
 		return fronts [id];
@@ -104,4 +111,5 @@ struct FrontManager
 
 	std::map<int, Front> fronts;
 	int currentlyHighestID;
+	int currentlyHighestFrontElementID;
 };
