@@ -11,6 +11,7 @@
 #include "niven.Core.Exception.h"
 #include "niven.Core.PointerHelper.h"
 #include <map>
+#include "niven.Core.Math.Vector.h"
 
 using namespace niven;
 
@@ -112,4 +113,5 @@ struct FrontManager
 	std::map<int, Front> fronts;
 	int currentlyHighestID;
 	int currentlyHighestFrontElementID;
+	std::vector<Vector3f> AdditionalDebugInfo;
 };

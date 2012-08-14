@@ -59,11 +59,13 @@ class HQMG2DApplication : public BaseApplication3D {
 	CMD_0,
 	CMD_1,
 	CMD_2,
+	CMD_3,
 	};
 
 	enum DrawMode {
 		Mesh = 1,
 		Intersections = 2,
+		Wireframe = 3,
 		All = 0
 	};
 
@@ -84,6 +86,9 @@ private:
 
 	std::vector<Color3f> debugColors_;
 	DrawMode drawMode_;
+
+	int stepStart_;
+	int stepIntervall_;
 
 public:
 	HQMG2DApplication(const String& volumeName, float isoValue)
@@ -124,20 +129,26 @@ private:
 		commandMapper_.RegisterCommand (CMD_2, KeyBinding (KeyCodes::Key_2,
 			KeyBindingActivator::Pressed));
 
+		commandMapper_.RegisterCommand (CMD_3, KeyBinding (KeyCodes::Key_3,
+			KeyBindingActivator::Pressed));
+
 		camera_->GetFrustum().SetPerspectiveProjection(
 			Degree (75.0f),
 			renderWindow_->GetAspectRatio(),
-			1.0f, 1024.0f);
+			0.01f, 1024.0f);
 
 		camera_->SetViewLookAt(Vector3f(-2.5f, -2.0f, -0.5f),
 			Vector3f(16, 16, 16),
 			Vector3f(0, 1, 0));
 
-		camera_->SetMoveSpeedMultiplier(10.0f);
+		camera_->SetMoveSpeedMultiplier(5.0f);
 
 		srand(time(NULL));
 		visibleTriangleCounter_ = 1;
 		drawMode_ = DrawMode::All;
+		//stepStart_ = 316;
+		stepStart_ = 1;
+		stepIntervall_ = 1;
 
 		effectManager_.Initialize(renderSystem_.get(), &effectLoader_);
 		
@@ -170,11 +181,11 @@ private:
 		mesh_.vertexBuffer = vertexBuffer_;
 		mesh_.indexBuffer = indexBuffer_;
 
-		debugColors_.resize(15);
+		debugColors_.resize(20);
 		// 0-8 fronts.
 		debugColors_[0] = Color3f(0, 1.0f, 0);
-		debugColors_[1] = Color3f(0, 1.0f, 1.0f);
-		debugColors_[2] = Color3f(0, 0, 1.0f);
+		debugColors_[1] = Color3f(0, 0, 1.0f);
+		debugColors_[2] = Color3f(0, 1.0f, 1.0f);
 		debugColors_[3] = Color3f(0, 0.25f, 0.25f);
 		debugColors_[4] = Color3f(0, 0.25f, 0);
 		debugColors_[5] = Color3f(0, 0, 0.25f);
@@ -188,8 +199,11 @@ private:
 		debugColors_[11] = Color3f(1.0f, 0, 0);
 		debugColors_[12] = Color3f(0, 1.0f, 0);
 		debugColors_[13] = Color3f(0, 0, 1.0f);
+		debugColors_[14] = Color3f(1.0f, 1.0f, 0);
 
-
+		if (stepStart_> 0){
+			ExecuteNextStep(stepStart_);
+		}
 	}
 	void HandleCommand(const CommandID id, const InputContext *context)
 	{
@@ -218,7 +232,7 @@ private:
 			break;
 			}
 		case CMD_ENTER:{
-			ExecuteNextStep();
+			ExecuteNextStep(stepIntervall_);
 			break;
 			}
 		case CMD_0:{
@@ -226,6 +240,7 @@ private:
 			dru_.Clear();
 			AddMeshDebugInformation();
 			AddIntersectionDebugInformation();
+			//AddWireFrame();
 			break;
 			}
 		case CMD_1:{
@@ -240,14 +255,20 @@ private:
 			AddIntersectionDebugInformation();
 			break;
 			}
+		case CMD_3:{
+			drawMode_ = DrawMode::Wireframe;
+			dru_.Clear();
+			AddWireFrame();
+			break;
+			}
 		}
 	}
 
-	void ExecuteNextStep(){
+	void ExecuteNextStep(int stepCount){
 
 		int previousSize = vertices_.size();
 
-		me_.TriangulateShardFile(vertices_, normals_, colors_, indices_, 1);
+		me_.TriangulateShardFile(vertices_, normals_, colors_, indices_, stepCount);
 
 		vb_.resize(vertices_.size ());
 
@@ -275,11 +296,13 @@ private:
 		mesh_.vertexCount = numeric_cast<int> (vertices_.size ());
 		mesh_.indexCount = numeric_cast<int> (indices_.size ());
 
+		// Debugging
 		dru_.Clear();
 		switch (drawMode_) {
 			case DrawMode::All:{
 				AddMeshDebugInformation();
 				AddIntersectionDebugInformation();
+				//AddWireFrame();
 				break;
 				}
 			case DrawMode::Mesh:{
@@ -290,8 +313,16 @@ private:
 				AddIntersectionDebugInformation();
 				break;
 				}
+			case DrawMode::Wireframe:{
+				AddWireFrame();
+				break;
+				}
 		}
-		
+
+		for (auto it = me_.AdditionalDebugInfo.begin(); it != me_.AdditionalDebugInfo.end(); it++){
+			dru_.AddCross((*it), Color3f(1.0f, 0.5f, 0.5f), 0.05);
+		}
+		me_.AdditionalDebugInfo.clear();
 	}
 
 	void AddIntersectionDebugInformation() {
@@ -305,6 +336,18 @@ private:
 
 		for (auto it = me_.Intersections.begin(); it != me_.Intersections.end(); it++){
 			dru_.AddCross((*it), debugColors_[13], 0.02f);
+		}
+
+		dru_.AddLine(me_.TransformedPostOrigin, me_.TransformedPostNeighbor, debugColors_[14]);
+		dru_.AddLine(me_.TransformedPostNeighbor, me_.TransformedPostAttempt, debugColors_[14]);
+		dru_.AddLine(me_.TransformedPostAttempt, me_.TransformedPostOrigin, debugColors_[14]);
+	}
+
+	void AddWireFrame() {
+		for (auto it = 0; it < vertices_.size(); it += 3){
+			dru_.AddLine(vertices_[it], vertices_[it + 1], Color3f(0.0f, 1.0f, 1.0f));
+			dru_.AddLine(vertices_[it + 1], vertices_[it + 2], Color3f(0.0f, 1.0f, 1.0f));
+			dru_.AddLine(vertices_[it + 2], vertices_[it], Color3f(0.0f, 1.0f, 1.0f));
 		}
 	}
 
