@@ -104,6 +104,9 @@ void Front::Split(const FrontListIterator& origin, FrontListIterator& intersect,
 	// And we need to add a copy of intersect to f1
 	f1.InsertVertex(copyIntersect, origin, &fm);
 
+	//fm.AdditionalDebugInfo.push_back(copyOrigin.Position);
+	//fm.AdditionalDebugInfo.push_back(copyIntersect.Position);
+
 	if(f1.Size() <= 2 || f2.Size() <= 2){
 		int lefail = 0;
 	}
