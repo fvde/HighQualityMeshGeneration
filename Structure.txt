@@ -1,0 +1,60 @@
+== Abstract ==
+
+== Einleitung ==
+
+== Stand der Wissenschaft ==
+- Ziele und Anwendung
+  * Remeshing
+  * Bewahrung von Features
+  * Beliebige Komplexität
+  * Vermeidung von Zusatzschritten, wie bei MC evtl. nötig
+  * Adaptives triangulieren
+
+- Iso-Surfaces [17, 9]
+   
+- Verfahren
+  * Marching Cubes [33, 39] + evtl. [14, 35, 37]
+  * Marching Tetrahedra [40, 47]
+  * Advancing Front Algorithmen [45, 7, 26]
+  * Direct Extraction (Wood et al. [51])
+  * QEM-based simplification [44]
+  * Cocoone & Powercrust [44]
+
+== Definition der Oberfläche ==
+- Forderungen an die Oberflächenrepräsentation
+  * Stetigkeit, Definiertheit, Ableitbarkeit, Kombinierbarkeit
+
+- Mögliche Formen der Definition
+  * Structured Grid. vs Unstructured Grid
+  * Catmull-Rom Splines, Finite Differenzen, Hermite Interpolation, B-Splines, MLS
+
+- In dieser Arbeit: Catmull-Rom Splines
+  * Erläutern der Multivariaten Polynome	
+  * Erläutern der Splines
+  * Erläutern der Projektion
+
+== Guidance Field Konstruktion ==
+  * Problem: Nicht adaptive Techniken, lokal adaptive [1, 13, 26], heuristische [26]
+  * Daher Guidance Field (Schreiner et al. [45]) -> Skalar funktion auf der Oberfläche
+  * Konstruktion und Bedingungen
+  * Oberflächentensor
+  * Sampling
+  * Evaluierung & Octree	
+
+== Triangulierung ==
+  * Grober Ablauf des Algorithmus
+  * Seeds
+  * Front Management: Merging & Splitting
+  * Kollisionserkennung: Transformation, Edge/Edge, Inside-Triangle Intersections
+  * Kollisionshandling: Auswahl der besten Intersection Edge, des besten Elements
+  * Nachträgliche Tests: Hat das neue Dreieck zu neuen Intersections geführt?
+
+
+== Ausblick und Diskussion ==
+  * Parallelisierung und GPU
+  * Verbesserung der Dreiecksqualität durch temporäre und final Dreiecke.
+  * Verbesserung der Dreiecksqualität durch bevorzugen von guten Dreiecken
+
+
+
+
