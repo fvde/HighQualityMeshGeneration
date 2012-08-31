@@ -107,7 +107,7 @@ bool Octree::Build(std::vector<GuidanceFieldSample> samples,
         return true;
 }
 
-void Octree::Traverse(TraversalFunction& proc, Vector3f& pos, float distance, std::vector<GuidanceFieldSample>& data) const
+void Octree::Traverse(TraversalFunction& proc, const Vector3f& pos, float distance, std::vector<GuidanceFieldSample>& data) const
 {
         // Call the callback for this node (if the callback returns false, then
         // stop traversing.

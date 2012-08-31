@@ -67,7 +67,17 @@ SplineSurface::SplineSurface(const ShardFileParser::Ptr& sfp, float isovalue)
 		MemoryLayout3D innerSamplelayout (2);
 		Iterator3D innerSampleIterator (innerSamplelayout);
 
+		int totalNumberOfCells = layout_.GetStorageSize();
+		int current = 0;
+
 		while (!it.IsAtEnd()) {
+
+			// Give debug feedback
+			if (current % (totalNumberOfCells/10) == 0){
+				char buffer[200];
+				sprintf(buffer, "Calculating surface... (%i %% done)", (int)(100.0f * (current/(float)totalNumberOfCells)));
+				Log::Debug("Surface", buffer);
+			}
 
 			// Find samples in a 4 x 4 area
 			sampleIterator.Reset();
@@ -92,13 +102,14 @@ SplineSurface::SplineSurface(const ShardFileParser::Ptr& sfp, float isovalue)
 			if(	*std::min_element(innerSamples.begin(), innerSamples.begin() + innerSamples.size()) <= isovalue_
 				&& *std::max_element(innerSamples.begin(), innerSamples.begin() + innerSamples.size()) >= isovalue_){
 				// Create a spline, in this case CatmullRom
-				splines_[layout_(it)] = CatmullRomSpline(samples);
+				splines_[layout_(it)] = CardinalSpline(0.2f, samples);
 				isoSurfaceSplines_.push_back(std::pair<Vector3i, Spline*>(it.ToVector(), &splines_[layout_(it)]));
 			} else {
 				splines_[layout_(it)] = EmptySpline();
 			}
 
 			it++;
+			current++;
 		}
 
 		Log::Debug("Surface", "Surface calculation completed!");

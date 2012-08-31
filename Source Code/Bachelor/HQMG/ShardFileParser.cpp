@@ -1,15 +1,20 @@
 #include "ShardFileParser.h"
 
 
+
+
 ShardFileParser::ShardFileParser(const String& volumeName, float isoValue)
 	: volumeName_(volumeName),
 	isoValue_(isoValue){
 
 		// Open the shardfile
-		creatOwnVolumeFile();
+		//creatOwnVolumeFile();
 		volume_.Open("smallSphere.nvf", true);
+		//volume_.Open("soldier-64.nvf", true);
+		//volume_.Open("smallCube.nvf", true);
 		//volume_.Open (volumeName_, true);
 		const String layerName = "Density";
+		const bool isUIntVolume = false;
 
 		if(volume_.ContainsLayer(layerName)){
 
@@ -19,9 +24,25 @@ ShardFileParser::ShardFileParser(const String& volumeName, float isoValue)
 			layout_ = MemoryLayout3D(layerDescriptor.blockResolution + borderSize_ * 2);
 			density_ = std::vector<float>(layout_.GetStorageSize());
 
-			for (auto it = ids.begin (), end = ids.end (); it != end; ++it) 
-			{
-				volume_.GetBlock(layerName, *it, density_);
+			if (isUIntVolume){
+				// Transformation required, since density is in uint16
+				std::vector<uint16> uIntDensity = std::vector<uint16>(layout_.GetStorageSize());
+				for (auto it = ids.begin (), end = ids.end (); it != end; ++it) 
+				{
+					volume_.GetBlock(layerName, *it, uIntDensity);
+				}
+
+				for (int x = 0; x < uIntDensity.size(); x++)
+				{
+					density_[x] = uIntDensity[x] / 16384;
+				}
+
+			} else {
+				// No transformation required, density is in float [0, 1]
+				for (auto it = ids.begin (), end = ids.end (); it != end; ++it) 
+				{
+					volume_.GetBlock(layerName, *it, density_);
+				}
 			}
 		} else {
 			throw Exception("No density layer in the volume file!", "...");
@@ -59,12 +80,12 @@ int ShardFileParser::getBorderSize() const {
 
 
 void ShardFileParser::creatOwnVolumeFile(){
-int volumeSize = 4;
+int volumeSize = 8;
 int volumeBorderSize = 0;
 const String layerName = "Density";
 
 auto volume = Volume::FileBlockStorage ();
-volume.Create ("smallSphere.nvf");
+volume.Create ("smallCube.nvf");
 
 Volume::FileBlockStorage::Metadata fileMetadata;
 fileMetadata.blockSize = volumeSize;
@@ -92,10 +113,31 @@ volumeData[x] = 0.0f;
 Iterator3D it (volumeSize, volumeSize, volumeSize), end;
 const Vector3f center (volumeSize / 2.0f, volumeSize / 2.0f, volumeSize / 2.0f);
 
+// Fill the volume
+// 1) Sphere
+/*
 while (it != end){
-const float distance = Length (center - it.ToVector ().Cast<float> ()) / (volumeSize / 2.0f);
-volumeData[l(it.X() + volumeBorderSize, it.Y() + volumeBorderSize, it.Z() + volumeBorderSize)] = 1 - Math::Clamp (distance, 0.0f, 1.0f);
-++it;
+	const float distance = Length (center - it.ToVector ().Cast<float> ()) / (volumeSize / 2.0f);
+	volumeData[l(it.X() + volumeBorderSize, it.Y() + volumeBorderSize, it.Z() + volumeBorderSize)] = 1 - Math::Clamp (distance, 0.0f, 1.0f);
+	++it;
+}
+
+// 2) Slice of a sphere
+while (it != end){
+	const float distance = Length (center - it.ToVector ().Cast<float> ()) / (volumeSize / 2.0f);
+	if (it.Y()== 2) {
+		volumeData[l(it.X() + volumeBorderSize, it.Y() + volumeBorderSize, it.Z() + volumeBorderSize)] = 1 - Math::Clamp (distance, 0.0f, 1.0f);
+	}
+	++it;
+}
+*/
+
+// 2) Cube
+while (it != end){
+	if ((abs(it.Y() - volumeSize) <= 2) && (abs(it.X() - volumeSize) <= 4) && (abs(it.Z() - volumeSize) <= 2)) {
+		volumeData[l(it.X() + volumeBorderSize, it.Y() + volumeBorderSize, it.Z() + volumeBorderSize)] = 1;
+	}
+	++it;
 }
 
 const Volume::IBlockStorage::Id id = { Vector3i (0, 0, 0), 0 };

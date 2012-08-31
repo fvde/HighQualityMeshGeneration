@@ -39,7 +39,7 @@ public:
 					const std::vector<niven::Vector3f>& offsetTable,
 					const unsigned int count, 
 					const OctreeBoundingBox &bounds);
-	void Traverse(TraversalFunction& proc, Vector3f& pos, float distance, std::vector<GuidanceFieldSample>& data) const;
+	void Traverse(TraversalFunction& proc, const Vector3f& pos, float distance, std::vector<GuidanceFieldSample>& data) const;
 	bool IsLeaf() const;
 	bool PositionIsWithinDistance(const Vector3f& pos, float distance) const;
 	GuidanceFieldSample GetLeafSample() const;
