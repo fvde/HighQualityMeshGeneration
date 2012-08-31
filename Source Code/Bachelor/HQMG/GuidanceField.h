@@ -45,7 +45,8 @@ public:
 	GuidanceField(const ShardFileParser::Ptr& sfp, Surface::Ptr s, float p, float n);
 	float GetDensity(float x, float y, float z) const;
 	std::vector<GuidanceFieldSample> GetSamples() const;
-	GuidanceFieldSample Evaluate(Vector3f pos);
+	float Evaluate(const Vector3f pos);
+	float G(const GuidanceFieldSample s, const Vector3f x);
 
 private:
 
@@ -58,8 +59,8 @@ private:
 	int samplingDensity_;
 	int randomSeed_;
 	float maxTriangleLength_;
-	float sampleAdaptivityRange_;
 	// Octree traversal function
 	std::function<bool (const Octree &o, const niven::Vector3f pos, float distance, std::vector<GuidanceFieldSample>& data)> getSamplesByDistance_;
 	Octree octree_;
+	float guidanceFieldEvaluationrange_;
 };

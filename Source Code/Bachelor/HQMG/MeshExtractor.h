@@ -59,6 +59,13 @@ public:
 			v2 = it2->vertex.Position;
 			front = it1->front;
 		}
+
+		Edge(Vertex v, Front::FrontListIterator it2) {
+			frontIterator2 = it2;
+			v1 = v.Position;
+			v2 = it2->vertex.Position;
+			front = it2->front;
+		}
 		
 
 		Vector3f v1, v2;
@@ -78,27 +85,30 @@ public:
 	MeshExtractor(const ShardFileParser::Ptr& sfp, float isoValue, float p, float n);
 	void Setup();
 	void TriangulateShardFile(std::vector<Vector3f>& vertices, std::vector<Vector3f>& normals, std::vector<Vector4f>& colors, std::vector<uint32>& indices, int steps);
-	bool CheckFrontInterference(Vertex newVertex, Front::FrontListIterator& bestOrigin, Front::FrontListIterator& bestNeighbor, Front::FrontListIterator& bestIntersection);
+	bool CheckFrontInterference(Vertex newVertex, Front::FrontListIterator& bestOrigin, Front::FrontListIterator& bestNeighbor, Front::FrontListIterator& bestIntersection, bool& interferenceTestFailed);
 	bool GrowVertex(Vertex& v1, Vertex& v2, Vertex& newVertex);
 	bool ProjectVertexOnSurface(Vertex& v);
 	Triangle CreateTriangle(Vertex& v1, Vertex& v2, Vertex& v3);
 	Triangle CreateTriangle(Front& f);
 	bool GetIntersection(const MeshExtractor::Edge& e1, const MeshExtractor::Edge& e2, MeshExtractor::Intersection& intersection);
-	bool AngleIsValid(const Vector2f& origin, const Vector2f& v1, const Vector2f& v2);
+	static bool AngleIsValid(const Vector2f& origin, const Vector2f& dest, const Vector2f& point);
 
 private:
 	std::vector<MeshExtractor::Edge> GetEdgesInRange(const Vertex& v, const MeshExtractor::Edge& edgeCurrentPrevious);
 	void GetFrontFromSeed(Vector3f seed, FrontManager& fm);
 	void TransformEdge(MeshExtractor::Edge& edge, const Vector3f& translation, const Matrix3f& transformation);
-	void FindBestIntersection(const std::vector<MeshExtractor::Intersection>& intersections, const MeshExtractor::Edge& originalEdge, Front::FrontListIterator& bestOrigin, Front::FrontListIterator& bestNeighbor, Front::FrontListIterator& bestIntersection);
+	bool FindBestIntersection(const std::vector<MeshExtractor::Intersection>& intersections, const MeshExtractor::Edge& originalEdge, Front::FrontListIterator& bestOrigin, Front::FrontListIterator& bestNeighbor, Front::FrontListIterator& bestIntersection);
 	void ParseFrontManager();
 	bool TestZCoordinate(const MeshExtractor::Edge& edge, const float acceptance);
 	void TestEdge(const MeshExtractor::Edge& edge, const std::vector<MeshExtractor::Edge>& edgesInRange, std::vector<MeshExtractor::Intersection>& intersections);
 	void FindPointWithinTriangle(const MeshExtractor::Intersection& intersection, const Vector2f& v1, const Vector2f& v2, const Vector2f& v3, std::vector<MeshExtractor::Intersection>& intersections);
 	bool IsInsideTriangle(const Vector2f& a, const Vector2f& b, const Vector2f& c, const Vector2f& point);
-	bool IsSame2DVertex(Vector2f& v1, Vector2f& v2);
-	bool IsBetterIntersection(const MeshExtractor::Intersection& intersection, const float& distance, const float& insideTriangleMinimum, const float& overallMinimum, const int& originalFront);
-	const Front::FrontListIterator& FindBestIntersectionElement(const MeshExtractor::Intersection& intersection, const MeshExtractor::Edge& originalEdge);
+	bool IsSame2DVertex(const Vector2f& v1, const Vector2f& v2);
+	bool IsBetterIntersection(const MeshExtractor::Intersection& intersection, const float& distance, const float& insideTriangleMinimum, const float& splitMinimum, const float& overallMinimum, const int& originalFront);
+	bool FindBestIntersectionElement(const MeshExtractor::Intersection& intersection, const MeshExtractor::Edge& originalEdge, Front::FrontListIterator& bestElement);
+	void TestTriangle(MeshExtractor::Edge& intersectionOrigin, MeshExtractor::Edge& intersectionNeighbor, MeshExtractor::Edge& originNeighbor, const Vertex& newVertex, const Vector3f& translation, const Matrix3f& transformation, std::vector<MeshExtractor::Intersection>& intersections, const bool& isSecondaryTest);
+	void Get2DTransformation(const MeshExtractor::Edge& edge1, const MeshExtractor::Edge& edge2, Vector3f& translation, Matrix3f& transformation);
+	void DisplayProgress(const int& current, const int& total);
 
 public:
 	std::vector<std::vector<Vector3f>> DebugFront;
@@ -109,14 +119,16 @@ public:
 	Vector3f PostNeighbor;
 	Vector3f PostAttempt;
 
+	Vector3f TransformedPreOrigin;
+	Vector3f TransformedPreNeighbor;
+	Vector3f TransformedPreAttempt;
+
 	Vector3f TransformedPostOrigin;
 	Vector3f TransformedPostNeighbor;
 	Vector3f TransformedPostAttempt;
 
 	std::vector<Edge> LastEdgesInRange;
-	std::vector<Edge> LastIntersectionEdges;
 	std::vector<Vector3f> Intersections;
-
 	std::vector<Vector3f> AdditionalDebugInfo;
 
 private:
@@ -128,6 +140,9 @@ private:
 	int indiceCounter_;
 	int	debugMaxTriangleNumber_;
 	int debugTriangleCounter_;
-	float triangleSize_;
 	int totalSteps_;
+	float floatingPointPrecision_;
+	float collisionZCoordinateAcceptance_;
+	bool debugMode_;
+	Vector4f meshColor_;
 };

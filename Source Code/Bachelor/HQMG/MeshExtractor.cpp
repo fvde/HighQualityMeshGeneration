@@ -11,8 +11,11 @@ MeshExtractor::MeshExtractor(const ShardFileParser::Ptr& sfp, float isoValue, fl
 		indiceCounter_ = 0;
 		debugMaxTriangleNumber_ = 75;
 		debugTriangleCounter_ = debugMaxTriangleNumber_;
-		triangleSize_ = 0.5f;
 		totalSteps_ = 0;
+		floatingPointPrecision_ = 0.0001f;
+		collisionZCoordinateAcceptance_ = 1.0f;
+		debugMode_ = false;
+		meshColor_ = Vector4f(0.0f, 0.5f, 1.0f, 1.0f);
 	}
 
 void MeshExtractor::Setup(){	
@@ -21,16 +24,21 @@ void MeshExtractor::Setup(){
 
 	// Find a starting front
 	GetFrontFromSeed(seed, frontManager_);
+
+	if (!debugMode_){
+		Log::DisableLogging ("MeshExtractor");
+	}
 }
 
 
 void MeshExtractor::TriangulateShardFile(std::vector<Vector3f>& vertices, std::vector<Vector3f>& normals, std::vector<Vector4f>& colors, std::vector<uint32>& indices, int steps){
 
 	totalSteps_ += steps;
+	int currentRequestTotalSteps = steps;
 
 	char buffer[200];
 	sprintf(buffer, "Executing %i steps. Total number of steps is %i", steps, totalSteps_);
-	Log::Debug("MeshExtractor", buffer);
+	Log::Debug("Triangulator", buffer);
 
 	// Vector for finished triangles
 	std::vector<Triangle> triangles;
@@ -40,6 +48,15 @@ void MeshExtractor::TriangulateShardFile(std::vector<Vector3f>& vertices, std::v
 		steps--;
 		Front& currentFront = frontManager_.GetRandomFront();
 		int currentFrontID = currentFront.ID;
+
+		// Debugging
+		DisplayProgress(steps, currentRequestTotalSteps);
+
+		// Remove if invalid
+		if (currentFront.ID == -1){
+			frontManager_.RemoveFront(currentFrontID);
+			continue;
+		}
 
 		// If this front has only three elements it is a finished triangle
 		if(currentFront.Size() == 3 && !currentFront.SeedFront){
@@ -74,14 +91,22 @@ void MeshExtractor::TriangulateShardFile(std::vector<Vector3f>& vertices, std::v
 			continue;
 		}
 
+		// The vertex is valid, so update its information
+		attemptVertex.Normal = surface_->GetNormal(attemptVertex.Position);
+
+		// Update Guidance field information for the new vertex
+		attemptVertex.IdealEdgeLength = guidanceField_->Evaluate(attemptVertex.Position);
+		attemptVertex.Color = meshColor_;
+
 		// Update debug information
 		PreAttempt = attemptVertex.Position;
 		PostAttempt = attemptVertex.Position;
 
 		// Declare for identification of interfering fronts (by reference)
 		Front::FrontListIterator bestIntersection;
+		bool testFailed;
 
-		if(!CheckFrontInterference(attemptVertex, bestOrigin, bestNeighbor, bestIntersection))
+		if(!CheckFrontInterference(attemptVertex, bestOrigin, bestNeighbor, bestIntersection, testFailed))
 		{
 			// Create the new triangle
 			triangles.push_back(CreateTriangle(	v1, 
@@ -96,11 +121,21 @@ void MeshExtractor::TriangulateShardFile(std::vector<Vector3f>& vertices, std::v
 		} 
 		else 
 		{
-			if(currentFrontID == bestIntersection->front){
+			if (testFailed){
+				Log::Debug("MeshExtractor", "Front interference test was not able to determine a viable intersection!");
+				continue;
+			}
+
+			if (currentFrontID == bestIntersection->front){
 				// Split fronts ( -> Creates a new front)
 				currentFront.Split(bestOrigin, bestIntersection, frontManager_);
 			} else {
 				// Merge fronts ( -> Removes a front)
+
+				if (frontManager_[bestIntersection->front].Size() <= 3){
+					Log::Debug("MeshExtractor", "Didn't merge, because the other front only contains 3 elements!");
+					continue;
+				}
 				currentFront.Merge(bestOrigin, bestIntersection, frontManager_);
 			}
 		}
@@ -108,7 +143,7 @@ void MeshExtractor::TriangulateShardFile(std::vector<Vector3f>& vertices, std::v
 
 	char buffer2[200];
 	sprintf(buffer2, "Steps completed. Generated %i triangles.", triangles.size());
-	Log::Debug("MeshExtractor", buffer2);
+	Log::Debug("Triangulator", buffer2);
 
 	// Debugging
 	ParseFrontManager();
@@ -134,7 +169,7 @@ void MeshExtractor::TriangulateShardFile(std::vector<Vector3f>& vertices, std::v
 
 void MeshExtractor::GetFrontFromSeed(Vector3f seed, FrontManager& fm)
 {
-	GuidanceFieldSample sample = guidanceField_->Evaluate(seed);
+	float edgeLength = guidanceField_->Evaluate(seed);
 
 	Vector3f n = surface_->GetNormal(seed);
 	Vector3f n2 = Vector3f(n.Y(), n.X(), n.Z());
@@ -142,18 +177,23 @@ void MeshExtractor::GetFrontFromSeed(Vector3f seed, FrontManager& fm)
 
 	int newfrontID = fm.CreateFront();
 
-	Vertex v1 = Vertex(seed + 0.5 * sample.idealEdgeLength * surfaceVector);
-	Vertex v2 = Vertex(seed - 0.5 * sample.idealEdgeLength * surfaceVector);
+	Vertex v1 = Vertex(seed + 0.5 * edgeLength * surfaceVector);
+	Vertex v2 = Vertex(seed - 0.5 * edgeLength * surfaceVector);
 
 	v1.Normal = surface_->GetNormal(v1.Position);
 	v2.Normal = surface_->GetNormal(v2.Position);
+
+	v1.IdealEdgeLength = guidanceField_->Evaluate(v1.Position);
+	v1.Color = meshColor_;
+
+	v2.IdealEdgeLength = guidanceField_->Evaluate(v2.Position);
+	v2.Color = meshColor_;
 
 	fm[newfrontID].AddVertex(v1, &fm);
 	fm[newfrontID].AddVertex(v2, &fm);
 	fm[newfrontID].SeedFront = true;
 }
 
-// Grow vertices per definition to the left using previous element
 bool MeshExtractor::GrowVertex(Vertex& v1, Vertex& v2, Vertex& vNew)
 {
 	// TODO
@@ -161,24 +201,10 @@ bool MeshExtractor::GrowVertex(Vertex& v1, Vertex& v2, Vertex& vNew)
 		return false;
 	}
 
-	// Check if we calculated our vertices already
-
-	if(v1.IdealEdgeLength == std::numeric_limits<float>::infinity()){
-		GuidanceFieldSample sample1 = guidanceField_->Evaluate(v1.Position);
-		v1.IdealEdgeLength = sample1.idealEdgeLength;
-		v1.Color = sample1.debugColor;
-	}
-
-	if(v2.IdealEdgeLength == std::numeric_limits<float>::infinity()){
-		GuidanceFieldSample sample2 = guidanceField_->Evaluate(v2.Position);
-		v2.IdealEdgeLength = sample2.idealEdgeLength;
-		v2.Color = sample2.debugColor;
-	}
-
-	// Calculate vNew's position
-
 	Vector3f edgeDir = v2.Position - v1.Position;
 	const float distance = Length(edgeDir);
+
+	// Calculate vNew's position
 
 	if(distance > (v1.IdealEdgeLength + v2.IdealEdgeLength) || distance < abs(v1.IdealEdgeLength - v2.IdealEdgeLength)){
 		// No solution: Circles don't intersect
@@ -209,9 +235,6 @@ bool MeshExtractor::GrowVertex(Vertex& v1, Vertex& v2, Vertex& vNew)
 
 	// Set the position
 	vNew.Position = v1.Position + (edgeDir * a) + (vertexDir * height);
-	//vNew.Normal = edgeNormal;
-
-	//NIV_DEBUGBREAK_IF_TRUE(vNew.Position.X() != vNew.Position.X());
 
 	return true;
 }
@@ -252,44 +275,182 @@ bool MeshExtractor::ProjectVertexOnSurface(Vertex& v){
 		return Length(pos1-v.Position) < Length(pos2-v.Position);
 	}));
 
-	v.Normal = surface_->GetNormal(v.Position);
-
-	// Update Guidance field information for the new vertex
-	GuidanceFieldSample sample = guidanceField_->Evaluate(v.Position);
-	v.IdealEdgeLength = sample.idealEdgeLength;
-	v.Color = sample.debugColor;
+	// Check if the projection was successful
+	if (v.Position.X() != v.Position.X() || v.Position.Y() != v.Position.Y() || v.Position.Z() != v.Position.Z()){
+		// Undefined position!
+		return false;
+	}
 
 	return true;
 }
 
-bool MeshExtractor::CheckFrontInterference(Vertex newVertex, Front::FrontListIterator& bestOrigin, Front::FrontListIterator& bestNeighbor, Front::FrontListIterator& bestIntersection){
+bool MeshExtractor::CheckFrontInterference(Vertex newVertex, Front::FrontListIterator& bestOrigin, Front::FrontListIterator& bestNeighbor, Front::FrontListIterator& bestIntersection, bool& interferenceTestFailed){
 
-	Front& current = frontManager_[bestOrigin->front];
-	Vector3f originOffset = newVertex.Position;
+	// Create the edges of the new triangle
+	Edge intersectionOrigin(newVertex, bestOrigin);
+	Edge intersectionNeighbor(newVertex, bestNeighbor);
+	Edge originNeighbor(bestOrigin, bestNeighbor);
+	interferenceTestFailed = false;
 
-	// We will test all edges in range against the edges between v1, v2 and newVertex
-	Edge edge1;
-	edge1.front = current.ID;
-	edge1.v1 = newVertex.Position;
-	edge1.frontIterator2 = bestOrigin;
-	edge1.v2 = edge1.frontIterator2->vertex.Position;
+	// Debugging
+	PreOrigin = intersectionOrigin.v2;
+	PreNeighbor = intersectionNeighbor.v2;
+	PreAttempt = intersectionOrigin.v1;
+	TransformedPostOrigin = Vector3f(0, 0, 0);
+	TransformedPostNeighbor = Vector3f(0, 0, 0);
+	TransformedPostAttempt = Vector3f(0, 0, 0);
+	LastEdgesInRange.clear();
+	Intersections.clear();
 
-	Edge edge2;
-	edge2.front = current.ID;
-	edge2.v1 = newVertex.Position;
-	edge2.frontIterator2 = bestNeighbor;
-	edge2.v2 = edge2.frontIterator2->vertex.Position;
+	/* 
+	Create a coordinate system that is spanned by the vector pointing from the 
+	new vertex to the current vertex and a vector orthogonal to that.	
+	In this space we will do all the intersection detection
+	*/
+	Vector3f originOffset;
+	Matrix3f coordinateSystem;
+	Get2DTransformation(intersectionOrigin, intersectionNeighbor, originOffset, coordinateSystem); 
 
-	// The edges that could have an impact on us, are all but the one between curent and Previous(current). edge1 and edge2 are local variables right now, so they can't be found.
-	Edge edgeOriginNeighbor(bestOrigin, bestNeighbor);
-	std::vector<MeshExtractor::Edge> edges = GetEdgesInRange(newVertex, edgeOriginNeighbor);
+	/*
+	Now we will test this triangle against an appropriate 2D area around it.
+	Intersections will be:
+	1) Direct edge/edge intersections
+	2) Points inside the triangle (because our triangle could include a geometric feature completely)
+	*/
+	std::vector<MeshExtractor::Intersection> intersections;
+	TestTriangle(	intersectionOrigin,
+					intersectionNeighbor,
+					originNeighbor,
+					newVertex,
+					originOffset,
+					coordinateSystem,
+					intersections,
+					false);
 
-	// No interference if no elements are in range
-	if (edges.size() == 0){
+	// If we didn't find any intersections we're done.
+	if (intersections.size() == 0){
 		return false;
 	}
 
-	// Now transform their coordinate system, so that we can project everything into 2D and intersect
+	/*
+	Now we only have to find the intersection that fits best.
+	Several criteria have to be met
+	1) The intersection may not be part of the triangle or directly adjacent
+	2) The angle between the original edge and the new edges must always be in [0,180°]
+	3) Inside triangle points will be prefered over outside triangle points (conservative growth)
+	4) Splitting is prefered over merging
+	*/
+
+	if (!FindBestIntersection(intersections, originNeighbor, bestOrigin, bestNeighbor, bestIntersection)){
+		// None of the intersections was viable, abort.
+		interferenceTestFailed = true;
+		return true;
+	}
+
+	/* 
+	We have found the ideal intersection and origin. But this intersection could 
+	lead to new intersections if we're unlucky. The new triangle we have to test 
+	consists of the edge originNeighbor and the best intersection
+	*/
+	int safetyCounter = 5;
+	do {
+		safetyCounter--;
+
+		Edge newIntersectionOrigin(bestIntersection, bestOrigin);
+		Edge newIntersectionNeighbor(bestIntersection, bestNeighbor);
+		Edge newOriginNeighbor(bestOrigin, bestNeighbor);
+
+		intersections.clear();
+		TestTriangle(	newIntersectionOrigin,
+						newIntersectionNeighbor,
+						newOriginNeighbor,
+						bestIntersection->vertex,
+						originOffset,
+						coordinateSystem,
+						intersections,
+						true);
+
+		if (intersections.size() > 0) {
+			if (!FindBestIntersection(intersections, newOriginNeighbor, bestOrigin, bestNeighbor, bestIntersection)){
+				// None of the intersections was viable, abort.
+				interferenceTestFailed = true;
+				return true;
+			}
+		}
+
+	} while (intersections.size() > 0 && safetyCounter > 0);
+
+	// Check if we found a triangle that didnt lead to any new intersections
+	if (intersections.size() > 0){
+		// Failed to find such a triangle
+		interferenceTestFailed = true;
+		return true;
+	}
+
+	return true;
+}
+
+void MeshExtractor::TestTriangle(MeshExtractor::Edge& intersectionOrigin, MeshExtractor::Edge& intersectionNeighbor, MeshExtractor::Edge& originNeighbor, const Vertex& newVertex, const Vector3f& translation, const Matrix3f& transformation, std::vector<MeshExtractor::Intersection>& intersections, const bool& isSecondaryTest){
+	
+	std::vector<MeshExtractor::Edge> edges = GetEdgesInRange(newVertex, originNeighbor);
+
+	// Translate and transform
+	TransformEdge(intersectionOrigin, -translation, transformation);
+	TransformEdge(intersectionNeighbor, -translation, transformation);
+	TransformEdge(originNeighbor, -translation, transformation);
+
+	// Debugging
+	if(!isSecondaryTest){
+		TransformedPreOrigin = Vector3f(intersectionOrigin.v2.X(), intersectionOrigin.v2.Y(), 0);
+		TransformedPreNeighbor = Vector3f(intersectionNeighbor.v2.X(), intersectionNeighbor.v2.Y(), 0);
+		TransformedPreAttempt = Vector3f(intersectionOrigin.v1.X(), intersectionOrigin.v1.Y(), 0);
+	}
+
+	for (auto it = edges.begin(); it != edges.end(); it++){
+		TransformEdge((*it), -translation, transformation);
+		LastEdgesInRange.push_back(*it);
+	}
+
+	// Test the two new edges against all other found edges
+	TestEdge(intersectionOrigin, edges, intersections);
+	TestEdge(intersectionNeighbor, edges, intersections);
+
+	// Test if any of the points of the found edges is within the triangle
+	MeshExtractor::Intersection intersection;
+	intersection.origin = originNeighbor.frontIterator1;
+	for (auto it = edges.begin(); it != edges.end(); it++){
+
+		intersection.edge = (*it);
+		FindPointWithinTriangle(intersection, 
+								Vector2f(intersectionOrigin.v1.X(), intersectionOrigin.v1.Y()),
+								Vector2f(intersectionOrigin.v2.X(), intersectionOrigin.v2.Y()),
+								Vector2f(intersectionNeighbor.v2.X(), intersectionNeighbor.v2.Y()),
+								intersections);
+
+	}
+
+	// If its a secondary test, remove the intersection with the bestIntersection vertex
+	if (isSecondaryTest) {
+
+		std::vector<MeshExtractor::Intersection> filteredIntersections;
+		Vector2f i = Vector2f(intersectionOrigin.v1.X(), intersectionOrigin.v1.Y());
+
+		for (auto it = intersections.begin(); it != intersections.end(); it++) {
+			if (!IsSame2DVertex(Vector2f(it->x, it->y), i))                                                         
+			{                                                                       
+				filteredIntersections.push_back(*it);
+			}                                                                       
+		}
+
+		intersections = filteredIntersections;
+	}
+}
+
+void MeshExtractor::Get2DTransformation(const MeshExtractor::Edge& edge1, const MeshExtractor::Edge& edge2, Vector3f& translation, Matrix3f& transformation){
+		
+	// The translation is the offset to the origin. Which is the intersection point (the new vertex).
+	translation = edge1.v1;
+	
 	// Create a coodinate system that is spanned by the vector pointing from the new vertex to the current vertex and a vector orthogonal to that.
 	Vector3f u = edge1.v2 - edge1.v1;
 	u.Normalize();
@@ -305,128 +466,16 @@ bool MeshExtractor::CheckFrontInterference(Vertex newVertex, Front::FrontListIte
 	v.Normalize();
 
 	// Transformation matrix
-	Matrix3f coordinateSystem = Matrix3f(	u.X(), u.Y(), u.Z(),
-											v.X(), v.Y(), v.Z(),
-											n.X(), n.Y(), n.Z());
+	transformation = Matrix3f(	u.X(), u.Y(), u.Z(),
+								v.X(), v.Y(), v.Z(),
+								n.X(), n.Y(), n.Z());
 
-	// Translate and transform
-	TransformEdge(edge1, -originOffset, coordinateSystem);
-	TransformEdge(edge2, -originOffset, coordinateSystem);
-	TransformEdge(edgeOriginNeighbor, -originOffset, coordinateSystem);
-
-	for (auto it = edges.begin(); it != edges.end(); it++){
-		TransformEdge((*it), -originOffset, coordinateSystem);
-	}
-
-	// For debugging
-	LastEdgesInRange.clear();
-	LastIntersectionEdges.clear();
-	Intersections.clear();
-
-	std::vector<MeshExtractor::Intersection> potentialIntersections;
-
-	TestEdge(edge1, edges, potentialIntersections);
-	TestEdge(edge2, edges, potentialIntersections);
-
-	// More Debug Information:
-	TransformedPostOrigin = edgeOriginNeighbor.v1;
-	TransformedPostNeighbor = edgeOriginNeighbor.v2;
-	TransformedPostAttempt = edge1.v1;
-
-	// Return if no intersections were found
-	if(potentialIntersections.size() == 0){
-		return false;
-	}
-	
-	// For all found intersections get the points within the triangle
-	std::vector<MeshExtractor::Intersection> insideTriangleIntersections;
-	MeshExtractor::Intersection intersection;
-	intersection.origin = edgeOriginNeighbor.frontIterator1;
-	// Temporary // TODO
-	// Add all points inside the triangle as intersections
-	/*
-	for (auto it = edges.begin(); it != edges.end(); it++){
-
-		intersection.edge = (*it);
-		FindPointWithinTriangle(intersection, Vector2f(edge1.v1.X(), edge1.v1.Y()),
-										Vector2f(edge1.v2.X(), edge1.v2.Y()),
-										Vector2f(edge2.v2.X(), edge2.v2.Y()),
-										insideTriangleIntersections);
-	}
-	*/
-	
-	for (auto it = potentialIntersections.begin(); it != potentialIntersections.end(); it++){
-		FindPointWithinTriangle((*it), Vector2f(edge1.v1.X(), edge1.v1.Y()),
-										Vector2f(edge1.v2.X(), edge1.v2.Y()),
-										Vector2f(edge2.v2.X(), edge2.v2.Y()),
-										insideTriangleIntersections);
-	}
-	
-
-	potentialIntersections.insert(potentialIntersections.begin(), insideTriangleIntersections.begin(), insideTriangleIntersections.begin() + insideTriangleIntersections.size());
-
-	// Now we only have to find the intersections that fits best.
-	FindBestIntersection(potentialIntersections, edgeOriginNeighbor, bestOrigin, bestNeighbor, bestIntersection);
-
-	// We have found the ideal intersection and origin. But this intersection could lead to new intersections if we're unlucky.
-	/*
-	int safety = 5;
-	do {
-		safety--;
-
-		Edge originIntersection (bestIntersection, bestOrigin);
-		Edge neighborIntersection (bestIntersection, bestNeighbor);
-		Edge newCurentNewPrevious(bestOrigin, bestNeighbor);
-		potentialIntersections.clear();
-		insideTriangleIntersections.clear();
-
-		// Find edges
-		edges = GetEdgesInRange(bestOrigin->vertex, newCurentNewPrevious);
-
-		// Transform edges
-		TransformEdge(originIntersection, -originOffset, coordinateSystem);
-		TransformEdge(neighborIntersection, -originOffset, coordinateSystem);
-		TransformEdge(newCurentNewPrevious, -originOffset, coordinateSystem);
-		for (auto it = edges.begin(); it != edges.end(); it++){
-			TransformEdge((*it), -originOffset, coordinateSystem);
-		}
-
-		// Test
-		LastEdgesInRange.clear();
-		LastIntersectionEdges.clear();
-		TestEdge(originIntersection, edges, potentialIntersections);
-		TestEdge(neighborIntersection, edges, potentialIntersections);
-
-		// For all found intersections get the points within the triangle
-		for (auto it = potentialIntersections.begin(); it != potentialIntersections.end(); it++){
-			FindPointWithinTriangle((*it), Vector2f(originIntersection.v1.X(), originIntersection.v1.Y()),
-										Vector2f(originIntersection.v2.X(), originIntersection.v2.Y()),
-										Vector2f(neighborIntersection.v2.X(), neighborIntersection.v2.Y()),
-										insideTriangleIntersections);
-		}
-
-		potentialIntersections.insert(potentialIntersections.begin(), insideTriangleIntersections.begin(), insideTriangleIntersections.begin() + insideTriangleIntersections.size());
-
-
-		// Debbuging
-		for (auto it = potentialIntersections.begin(); it != potentialIntersections.end(); it++){
-			AdditionalDebugInfo.push_back(Vector3f(it->x, it->y, 0));
-		}
-
-		// We found intersections, now we have to identify the best intersection and origin once again. Greater than 1 because the list will include the intersecion with bestIntersection, which is fine.
-		if(potentialIntersections.size() > 2){
-			FindBestIntersection(potentialIntersections, newCurentNewPrevious, bestOrigin, bestNeighbor, bestIntersection);
-		}
-	} while (potentialIntersections.size() > 2 && safety > 0);
-	*/
-
-	return true;
 }
 
 std::vector<MeshExtractor::Edge> MeshExtractor::GetEdgesInRange(const Vertex& v, const MeshExtractor::Edge& edgeCurrentPrevious){
 	std::vector<MeshExtractor::Edge> elementsInRange;
 
-	// Ideal edge length has ben calculated before. Factor 2 because vertices could be outside the ideal length sphere and still intersect
+	// Ideal edge length has ben calculated before. Factor 3 because vertices could be outside the ideal length sphere and still intersect
 	float range = v.IdealEdgeLength * 3;
 
 	// TODO: Octree or any other spatial subdivision for faster traversal!
@@ -434,12 +483,17 @@ std::vector<MeshExtractor::Edge> MeshExtractor::GetEdgesInRange(const Vertex& v,
 		Front& f = frontIDIt->second;
 
 		for (auto frontElementIt = f.Elements.begin(); frontElementIt != f.Elements.end(); frontElementIt++){
-			if (Length(v.Position - frontElementIt->vertex.Position) < range && 
-				frontElementIt->ID != edgeCurrentPrevious.frontIterator1->ID &&
-				f.PreviousElement(frontElementIt)->ID != edgeCurrentPrevious.frontIterator2->ID){
+			if (Length(v.Position - frontElementIt->vertex.Position) < range){
 				// Make a copy and push back
 				MeshExtractor::Edge e(frontElementIt, f.PreviousElement(frontElementIt));
-				elementsInRange.push_back(e);
+
+				// Dont use if its the original edge
+				if ((e.frontIterator1->ID != edgeCurrentPrevious.frontIterator1->ID 
+					&& e.frontIterator2->ID != edgeCurrentPrevious.frontIterator2->ID)
+					||(e.frontIterator1->ID != edgeCurrentPrevious.frontIterator2->ID 
+					&& e.frontIterator2->ID != edgeCurrentPrevious.frontIterator1->ID)){
+					elementsInRange.push_back(e);
+				}
 			}
 		}
 	}
@@ -452,7 +506,6 @@ void MeshExtractor::TestEdge(const MeshExtractor::Edge& edge, const std::vector<
 	// The Edge MUST by transformed into the adequate 2D space beforehand!
 
 	MeshExtractor::Intersection currentIntersection;
-	float zCoordinateAcceptance = 0.5f;
 
 	// Other elements
 	for (auto it = edgesInRange.begin(); it != edgesInRange.end(); it++){
@@ -460,29 +513,25 @@ void MeshExtractor::TestEdge(const MeshExtractor::Edge& edge, const std::vector<
 		LastEdgesInRange.push_back(e);
 
 		// Discard edges which are not intersecting our slice of the mesh
-		if(!TestZCoordinate(e, zCoordinateAcceptance)){
+		if(!TestZCoordinate(e, collisionZCoordinateAcceptance_)){
 			continue;
 		}
 		
-			
+		// Edges with undefined attributes will be true	
 		if (e.v2.X() != e.v2.X() || e.v2.Y() != e.v2.Y()){
 			int fail = 0;
 		}
 
-		// From now on we ignore the z component
-		// Test each edge against egde1 and edge2
-
+		// Test Edge
 		if (GetIntersection(edge, e, currentIntersection)){
 			intersections.push_back(currentIntersection);
-			LastIntersectionEdges.push_back(currentIntersection.edge);
 			Intersections.push_back(Vector3f(currentIntersection.x, currentIntersection.y, 0));
 		}
 	}
 }
 
-
-
 bool MeshExtractor::GetIntersection(const MeshExtractor::Edge& e1, const MeshExtractor::Edge& e2, MeshExtractor::Intersection& intersection){
+
 	float x1 = e1.v1.X(), x2 = e1.v2.X(), x3 = e2.v1.X(), x4 = e2.v2.X();
 	float y1 = e1.v1.Y(), y2 = e1.v2.Y(), y3 = e2.v1.Y(), y4 = e2.v2.Y();
 
@@ -531,21 +580,31 @@ void MeshExtractor::FindPointWithinTriangle(const MeshExtractor::Intersection& i
 
 	if (MeshExtractor::IsInsideTriangle(v1, v2, v3, Vector2f(intersection.edge.v1.X(), intersection.edge.v1.Y()))){
 		Intersection i(intersection);
-		i.x = intersection.edge.v1.X();
-		i.y = intersection.edge.v1.Y();
+
+		Vector2f intersect(intersection.edge.v1.X(), intersection.edge.v1.Y());
+		i.x = intersect.X();
+		i.y = intersect.Y();
 		i.insideTriangle = true;
 
-		Intersections.push_back(Vector3f(i.x, i.y, 0));
-		intersections.push_back(i);
+		if ((!IsSame2DVertex(intersect, v1)) && (!IsSame2DVertex(intersect, v2)) && (!IsSame2DVertex(intersect, v3)))
+		{
+			Intersections.push_back(Vector3f(i.x, i.y, 0));
+			intersections.push_back(i);
+		}
 	} 
 	else  if (MeshExtractor::IsInsideTriangle(v1, v2, v3, Vector2f(intersection.edge.v2.X(), intersection.edge.v2.Y()))){
 		Intersection i(intersection);
-		i.x = intersection.edge.v2.X();
-		i.y = intersection.edge.v2.Y();
+		
+		Vector2f intersect(intersection.edge.v2.X(), intersection.edge.v2.Y());
+		i.x = intersect.X();
+		i.y = intersect.Y();
 		i.insideTriangle = true;
 
-		Intersections.push_back(Vector3f(i.x, i.y, 0));
-		intersections.push_back(i);
+		if ((!IsSame2DVertex(intersect, v1)) && (!IsSame2DVertex(intersect, v2)) && (!IsSame2DVertex(intersect, v3)))
+		{
+			Intersections.push_back(Vector3f(i.x, i.y, 0));
+			intersections.push_back(i);
+		}
 	}
 }
 
@@ -570,7 +629,7 @@ bool MeshExtractor::IsInsideTriangle(const Vector2f& a, const Vector2f& b, const
 	return (u >= 0) && (v >= 0) && (u + v < 1);
 }
 
-void MeshExtractor::FindBestIntersection(const std::vector<MeshExtractor::Intersection>& intersections, const MeshExtractor::Edge& originalEdge, Front::FrontListIterator& bestOrigin, Front::FrontListIterator& bestNeighbor, Front::FrontListIterator& bestIntersection){
+bool MeshExtractor::FindBestIntersection(const std::vector<MeshExtractor::Intersection>& intersections, const MeshExtractor::Edge& originalEdge, Front::FrontListIterator& bestOrigin, Front::FrontListIterator& bestNeighbor, Front::FrontListIterator& bestIntersection){
 
 	// We now have a list of edges interfering with us.
 	// v1 := originalEdge.v1 v2:= originalEdge.v2
@@ -578,37 +637,51 @@ void MeshExtractor::FindBestIntersection(const std::vector<MeshExtractor::Inters
 	// 1) It shouldn't be an intersection with v1 or v2: Guaranteed by GetIntersection.
 	// 2) Its distance to v1 and v2 should be minimal.
 	// 3) The edges between the intersection vertex and v1 and v2 should not lead to new intersections.
-	// 3.1) This should be guaranteed by 2) maybe /TODO
+	// We test 3) later
 
 	const Vector2f v1(originalEdge.v1.X(), originalEdge.v1.Y());
 	const Vector2f v2(originalEdge.v2.X(), originalEdge.v2.Y());
 
+	bool intersectionFound = false;
+
 	float currentMinimalDistance = std::numeric_limits<float>::infinity();
-	float curentInsideMinimalDistance = currentMinimalDistance;
+	float currentInsideMinimalDistance = currentMinimalDistance;
+	float currentSplitMinimalDistance = currentMinimalDistance;
 
 	for (auto it = intersections.begin(); it != intersections.end(); it++){
 			
 		// Current intersection
-		const Vector2f intersection(it->x, it->y);
-		const Vector2f intersectionv1(it->edge.v1.X(), it->edge.v1.Y());
-		const Vector2f inte rsectionv2(it->edge.v2.X(), it->edge.v2.Y());
+		Vector2f intersection(it->x, it->y);
+		Vector2f intersectionv1(it->edge.v1.X(), it->edge.v1.Y());
+		Vector2f intersectionv2(it->edge.v2.X(), it->edge.v2.Y());
 
 		// Note that originalEdge has been transformed into our 2D world.
 		float accumulatedDistance = Length(intersection - v1) + Length(intersection - v2);
 
 		// Decide if its a good intersection to pick
-		if (IsBetterIntersection((*it), accumulatedDistance, curentInsideMinimalDistance, currentMinimalDistance, originalEdge.front)) 
+		if (IsBetterIntersection((*it), accumulatedDistance, currentInsideMinimalDistance, currentSplitMinimalDistance, currentMinimalDistance, originalEdge.front)) 
 		{
+
+			// Find the vertex of the edge that is not v1 or v2 and closest to the intersection
+			if (!FindBestIntersectionElement((*it), originalEdge, bestIntersection)){
+				// The intersection was not useable! This is critical.
+				Log::Debug("MeshExtractor", "No intersection element was viable!");
+				continue;
+			} else {
+				intersectionFound = true;
+			}
+			bestOrigin = it->origin;
+
 			// This intersection is a minimal candidate. 
 			currentMinimalDistance = accumulatedDistance;
 
 			if (it->insideTriangle){
-				curentInsideMinimalDistance = accumulatedDistance;
+				currentInsideMinimalDistance = accumulatedDistance;
 			}
 
-			// Find the vertex of the edge that is not v1 or v2 and closest to the intersection
-			bestIntersection = FindBestIntersectionElement((*it), originalEdge);
-			bestOrigin = it->origin;
+			if (it->edge.front == originalEdge.front){
+				currentSplitMinimalDistance = accumulatedDistance;
+			}
 
 			// Find best neighbor. It has to be part of the original edge.
 			if (originalEdge.frontIterator1->ID == bestOrigin->ID){
@@ -631,20 +704,73 @@ void MeshExtractor::FindBestIntersection(const std::vector<MeshExtractor::Inters
 					bestOrigin = f.PreviousElement(bestOrigin);
 				}
 			}
-				
-			PostOrigin = bestOrigin->vertex.Position;
+
+			// Debugging
+			if (bestIntersection->ID == it->edge.frontIterator1->ID){
+				TransformedPostAttempt = Vector3f(it->edge.v1.X(), it->edge.v1.Y(), 0);
+			} else {
+				TransformedPostAttempt = Vector3f(it->edge.v2.X(), it->edge.v2.Y(), 0);
+			}
+	
 			PostAttempt = bestIntersection->vertex.Position;
+			PostOrigin = bestOrigin->vertex.Position;
+			PostNeighbor = bestNeighbor->vertex.Position;
+		}
+	}
+	
+	// Debugging
+	TransformedPostOrigin = Vector3f(originalEdge.v1.X(), originalEdge.v1.Y(), 0);
+	TransformedPostNeighbor = Vector3f(originalEdge.v2.X(), originalEdge.v2.Y(), 0);
+
+	return intersectionFound;
+}
+
+
+bool MeshExtractor::IsBetterIntersection(const MeshExtractor::Intersection& intersection, const float& distance, const float& insideTriangleMinimum, const float& splitMinimum, const float& overallMinimum, const int& originalFront){
+	
+	// How to decide if an intersection is better than previous ones:
+	// 1) Prefer intersections inside the original triangle
+	// 2) Prefer closer intersections
+	// 3) Of intersections with the same distance, prefer thos which belong to our own front -> prefer spliting
+	
+	
+	if (intersection.insideTriangle){
+		if (distance < insideTriangleMinimum){
+			return true;
+		} else if (abs(distance - insideTriangleMinimum) < floatingPointPrecision_) {
+			return (intersection.edge.front == originalFront);
+		} else {
+			return false;
+		}
+	} else if (intersection.edge.front == originalFront){
+		if (distance < splitMinimum){
+			return true;
+		} else {
+			return false;
+		}
+	} else {
+		// Stop if there has already been a better intersection within the triangle
+		if (insideTriangleMinimum != std::numeric_limits<float>::infinity() 
+			|| splitMinimum != std::numeric_limits<float>::infinity()){
+			return false;
+		}
+
+		if (distance < overallMinimum){
+			return true;
+		} else {
+			return false;
 		}
 	}
 }
 
-bool MeshExtractor::IsBetterIntersection(const MeshExtractor::Intersection& intersection, const float& distance, const float& insideTriangleMinimum, const float& overallMinimum, const int& originalFront){
-	/*
-	How to decide if an intersection is better than previous ones:
-	1) Prefer intersections inside the original triangle
-	2) Prefer closer intersections
-	3) Of intersections with the same distance, prefer thos which belong to our own front -> prefer spliting
-	*/
+/*
+
+bool MeshExtractor::IsBetterIntersection(const MeshExtractor::Intersection& intersection, const float& distance, const float& insideTriangleMinimum, const float& splitMinimum, const float& overallMinimum, const int& originalFront){
+
+	// How to decide if an intersection is better than previous ones:
+	// 1) Prefer intersections inside the original triangle
+	// 2) Prefer closer intersections
+	// 3) Of intersections with the same distance, prefer thos which belong to our own front -> prefer spliting
 	
 	if (intersection.insideTriangle){
 		if (distance < insideTriangleMinimum){
@@ -670,7 +796,9 @@ bool MeshExtractor::IsBetterIntersection(const MeshExtractor::Intersection& inte
 	}
 }
 
-const Front::FrontListIterator& MeshExtractor::FindBestIntersectionElement(const MeshExtractor::Intersection& intersection, const MeshExtractor::Edge& originalEdge){
+*/
+
+bool MeshExtractor::FindBestIntersectionElement(const MeshExtractor::Intersection& intersection, const MeshExtractor::Edge& originalEdge, Front::FrontListIterator& bestElement){
 	/*
 	How to decide which is the best front element for the intersection
 	1) It mustn't be v1 or v2
@@ -681,60 +809,67 @@ const Front::FrontListIterator& MeshExtractor::FindBestIntersectionElement(const
 	const Vector2f i(intersection.x, intersection.y);
 	const Vector2f iv1(intersection.edge.v1.X(), intersection.edge.v1.Y());
 	const Vector2f iv2(intersection.edge.v2.X(), intersection.edge.v2.Y());
+	const Vector2f original1(originalEdge.v1.X(), originalEdge.v1.Y());
+	const Vector2f original2(originalEdge.v2.X(), originalEdge.v2.Y());
 
-	if (intersection.edge.frontIterator1->ID == originalEdge.frontIterator1->ID || intersection.edge.frontIterator1->ID == originalEdge.frontIterator2->ID){
+	// ID's for better access and readability of code
+	const int intersectionID1 = intersection.edge.frontIterator1->ID;
+	const int intersectionID2 = intersection.edge.frontIterator2->ID;
+	const int originID1 = originalEdge.frontIterator1->ID;
+	const int originID2 = originalEdge.frontIterator2->ID;
+
+
+	if (intersectionID1 == originID1 || intersectionID1 == originID2){
 		// 1 is within the original edge, check 2
-		if (AngleIsValid(	Vector2f(originalEdge.v1.X(), originalEdge.v1.Y()), 
-							Vector2f(originalEdge.v2.X(), originalEdge.v2.Y()), 
+		if (AngleIsValid(	original1, 
+							original2, 
 							iv2)){
 			// Good intersection, pick it
-			return intersection.edge.frontIterator2;
+			bestElement = intersection.edge.frontIterator2;
 		} else {
-			throw Exception();
+			return false;
 		}
-	} else if (intersection.edge.frontIterator2->ID == originalEdge.frontIterator1->ID || intersection.edge.frontIterator2->ID == originalEdge.frontIterator2->ID){
+	} else if (intersectionID2 == originID1 || intersectionID2 == originID2){
 		// 2 is within the original edge, check 1
-		if (AngleIsValid(	Vector2f(originalEdge.v1.X(), originalEdge.v1.Y()), 
-							Vector2f(originalEdge.v2.X(), originalEdge.v2.Y()), 
+		if (AngleIsValid(	original1, 
+							original2, 
 							iv1)){
 			// Good intersection, pick it
-			return intersection.edge.frontIterator1;
+			bestElement = intersection.edge.frontIterator1;
 		} else {
-			throw Exception();
+			return false;
 		}
 	} else {
 		// None of them is part of the original edge. Now only check distance and angle
 		if (Length(i - iv1) < Length(i - iv2)){
 			// Intersection1 is closer
-			if (AngleIsValid(	Vector2f(originalEdge.v1.X(), originalEdge.v1.Y()), 
-								Vector2f(originalEdge.v2.X(), originalEdge.v2.Y()), 
+			if (AngleIsValid(	original1, 
+								original2, 
 								iv1)){
 				// Good intersection, pick it
-				return intersection.edge.frontIterator1; 
+				bestElement =  intersection.edge.frontIterator1; 
 			} else {
-				return intersection.edge.frontIterator2; 
+				bestElement = intersection.edge.frontIterator2; 
 			}
 		} else {
 			// Intersection2 is closer
-			if (AngleIsValid(	Vector2f(originalEdge.v1.X(), originalEdge.v1.Y()), 
-								Vector2f(originalEdge.v2.X(), originalEdge.v2.Y()), 
+			if (AngleIsValid(	original1, 
+								original2, 
 								iv2)){
 				// Good intersection, pick it
-				return intersection.edge.frontIterator2; 
+				bestElement = intersection.edge.frontIterator2; 
 			} else {
-				return intersection.edge.frontIterator1; 
+				bestElement = intersection.edge.frontIterator1; 
 			}
 		}
 	}
+
+	return true;
 }
 
-bool MeshExtractor::AngleIsValid(const Vector2f& origin, const Vector2f& v1, const Vector2f& v2){
-	Vector2f x1 = origin - v1;
-	Vector2f x2 = origin - v2;
-	x1.Normalize();
-	x2.Normalize();
-	float degree = (Math::Atan2(x2.X(), x2.Y()) - Math::Atan2(x1.X(), x1.Y())).GetDegrees();
-	return (degree < 180);
+bool MeshExtractor::AngleIsValid(const Vector2f& origin, const Vector2f& dest, const Vector2f& point){
+	float value = ((dest.X() - origin.X())*(point.Y() - origin.Y())) - ((dest.Y() - origin.Y())*(point.X() - origin.X()));
+	return (value < 0);
 }
 
 bool MeshExtractor::TestZCoordinate(const MeshExtractor::Edge& edge, const float acceptance){
@@ -755,7 +890,6 @@ void MeshExtractor::TransformEdge(MeshExtractor::Edge& edge, const Vector3f& tra
 	edge.v1 = transformation * edge.v1;
 	edge.v2 = transformation * edge.v2;
 }
-
 
 MeshExtractor::Triangle MeshExtractor::CreateTriangle(Front& f){
 
@@ -778,9 +912,8 @@ MeshExtractor::Triangle MeshExtractor::CreateTriangle(Vertex& v1, Vertex& v2, Ve
 	return t;
 }
 
-bool MeshExtractor::IsSame2DVertex(Vector2f& v1, Vector2f& v2){
-	float floatingPointPrecision = 0.00001f;
-	return v1.IsEqualEpsilon(v2, floatingPointPrecision);
+bool MeshExtractor::IsSame2DVertex(const Vector2f& v1, const Vector2f& v2){
+	return v1.IsEqualEpsilon(v2, floatingPointPrecision_);
 }
 
 void MeshExtractor::ParseFrontManager(){
@@ -789,6 +922,10 @@ void MeshExtractor::ParseFrontManager(){
 	for (auto frontIDIt = frontManager_.FrontsBegin(); frontIDIt != frontManager_.FrontsEnd(); frontIDIt++){
 		Front& f = frontIDIt->second;
 		std::vector<Vector3f> front;
+
+		if (f.ID == -1){
+			continue;
+		}
 
 		for (auto frontElementIt = f.Elements.begin(); frontElementIt != f.Elements.end(); frontElementIt++){
 			front.push_back(frontElementIt->vertex.Position);
@@ -799,4 +936,17 @@ void MeshExtractor::ParseFrontManager(){
 
 	AdditionalDebugInfo.insert(AdditionalDebugInfo.begin(), frontManager_.AdditionalDebugInfo.begin(), frontManager_.AdditionalDebugInfo.begin() + frontManager_.AdditionalDebugInfo.size());
 	frontManager_.AdditionalDebugInfo.clear();
+}
+
+void MeshExtractor::DisplayProgress(const int& current, const int& total){
+	if (total < 10){
+		return;
+	} else {
+		int tenPercent = total/10;
+		if (current % tenPercent == 0){
+			char buffer[200];
+			sprintf(buffer, "Triangulating... (%i %% done)", (int)(100.0f * (1 - current/(float)total)));
+			Log::Debug("Triangulator", buffer);
+		}
+	}
 }

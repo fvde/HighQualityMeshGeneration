@@ -146,9 +146,9 @@ private:
 		srand(time(NULL));
 		visibleTriangleCounter_ = 1;
 		drawMode_ = DrawMode::All;
-		//stepStart_ = 316;
 		stepStart_ = 1;
-		stepIntervall_ = 1;
+		//stepStart_ = 1;
+		stepIntervall_ = 500;
 
 		effectManager_.Initialize(renderSystem_.get(), &effectLoader_);
 		
@@ -162,10 +162,17 @@ private:
 
 		ShardFileParser::Ptr sfp = cpp0x::make_shared<ShardFileParser> (volumeName_, isoValue_);
 
-		Log::Debug("High Quality Mesh Generation", "Starting triangulation...");
-		me_ = MeshExtractor(sfp, isoValue_, 0.3f, 1.2f);
+		Log::Debug("Triangulator", "Preparing triangulation...");
+
+		// Relative size of the triangles
+		float triangleApproximationQuality = 0.3f;
+
+		// Maximum ratio between to adjacent triangles edges [1, infinity]
+		float triangleAdaptionRate = 1.2f;
+
+		me_ = MeshExtractor(sfp, isoValue_, triangleApproximationQuality, triangleAdaptionRate);
 		me_.Setup();
-		Log::Debug("High Quality Mesh Generation", "Ready for triangulation!");
+		Log::Debug("Triangulator", "Ready for triangulation!");
 
 
 		indexBuffer_ = renderSystem_->Wrap (renderSystem_->CreateIndexBuffer (
@@ -195,11 +202,12 @@ private:
 		// 9: Last Attempt triangle pre merge/split 10: Last Attempt triangle after split/merge
 		debugColors_[9] = Color3f(1.0f, 0, 0);
 		debugColors_[10] = Color3f(1.0f, 1.0f, 0);
-		// 11: Edges in range. 12: intersection edges, 13: intersection
+		// 11: Edges in range. 12: intersection edges, 13: intersection 14: Transformed triangle. 1: Transformed final triangle
 		debugColors_[11] = Color3f(1.0f, 0, 0);
 		debugColors_[12] = Color3f(0, 1.0f, 0);
 		debugColors_[13] = Color3f(0, 0, 1.0f);
-		debugColors_[14] = Color3f(1.0f, 1.0f, 0);
+		debugColors_[14] = Color3f(0, 1.0f, 0);
+		debugColors_[15] = Color3f(1.0f, 1.0f, 0);
 
 		if (stepStart_> 0){
 			ExecuteNextStep(stepStart_);
@@ -240,7 +248,6 @@ private:
 			dru_.Clear();
 			AddMeshDebugInformation();
 			AddIntersectionDebugInformation();
-			//AddWireFrame();
 			break;
 			}
 		case CMD_1:{
@@ -326,21 +333,22 @@ private:
 	}
 
 	void AddIntersectionDebugInformation() {
-		for (auto it = me_.LastEdgesInRange.begin(); it != me_.LastEdgesInRange.end(); it++){
-			dru_.AddLine(it->v1, it->v2, debugColors_[11]);
-		}
+	
+		dru_.AddLine(me_.TransformedPostOrigin, me_.TransformedPostNeighbor, debugColors_[15]);
+		dru_.AddLine(me_.TransformedPostNeighbor, me_.TransformedPostAttempt, debugColors_[15]);
+		dru_.AddLine(me_.TransformedPostAttempt, me_.TransformedPostOrigin, debugColors_[15]);
 
-		for (auto it = me_.LastIntersectionEdges.begin(); it != me_.LastIntersectionEdges.end(); it++){
-			dru_.AddLine(it->v1, it->v2, debugColors_[12]);
+		dru_.AddLine(me_.TransformedPreOrigin, me_.TransformedPreNeighbor, debugColors_[14]);
+		dru_.AddLine(me_.TransformedPreNeighbor, me_.TransformedPreAttempt, debugColors_[14]);
+		dru_.AddLine(me_.TransformedPreAttempt, me_.TransformedPreOrigin, debugColors_[14]);
+
+		for (auto it = me_.LastEdgesInRange.begin(); it != me_.LastEdgesInRange.end(); it++){
+			dru_.AddLine(Vector3f(it->v1.X(), it->v1.Y(), 0), Vector3f(it->v2.X(), it->v2.Y(), 0), debugColors_[11]);
 		}
 
 		for (auto it = me_.Intersections.begin(); it != me_.Intersections.end(); it++){
-			dru_.AddCross((*it), debugColors_[13], 0.02f);
+			dru_.AddCross(Vector3f(it->X(), it->Y(), 0), debugColors_[13], 0.01f);
 		}
-
-		dru_.AddLine(me_.TransformedPostOrigin, me_.TransformedPostNeighbor, debugColors_[14]);
-		dru_.AddLine(me_.TransformedPostNeighbor, me_.TransformedPostAttempt, debugColors_[14]);
-		dru_.AddLine(me_.TransformedPostAttempt, me_.TransformedPostOrigin, debugColors_[14]);
 	}
 
 	void AddWireFrame() {

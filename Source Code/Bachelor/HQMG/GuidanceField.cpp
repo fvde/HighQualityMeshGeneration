@@ -16,6 +16,7 @@ GuidanceField::GuidanceField(const ShardFileParser::Ptr& sfp, Surface::Ptr s, fl
 
 		samplingDensity_ = 50;
 		maxTriangleLength_ = 1.0f;
+		guidanceFieldEvaluationrange_ = 1.0f;
 
 		layout_ = MemoryLayout3D(sfp->getVolumeWidth(), sfp->getVolumeHeight(), sfp->getVolumeDepth());
 
@@ -70,7 +71,6 @@ GuidanceField::GuidanceField(const ShardFileParser::Ptr& sfp, Surface::Ptr s, fl
 		// Now calculate the tensor at each sample position and calculate the ideal edge length with it
 		Log::Debug("GuidanceField", "Calculating surface tensors for the samples...");
 
-
 		for (auto it = samples_.begin(); it != samples_.end(); it++){
 			// Calculate g
 			Vector3f g = Vector3f(
@@ -120,13 +120,7 @@ GuidanceField::GuidanceField(const ShardFileParser::Ptr& sfp, Surface::Ptr s, fl
 			float k2 = (Trace - sqrt) / 2;
 
 			// Calculate the final result, Kmax. Kmax defines the length of the ideal egde at a point s.
-			float Kmax = 0.0f;
-
-			if(k1 > k2){
-				Kmax = k1;
-			} else {
-				Kmax = k2;
-			}
+			float Kmax = Max(abs(k1), abs(k2));
 
 			// Set curvature
 			it->curvature = Kmax;
@@ -135,8 +129,8 @@ GuidanceField::GuidanceField(const ShardFileParser::Ptr& sfp, Surface::Ptr s, fl
 			float edgeLength;
 
 			if(Kmax != 0) {
-				// ATTENTION: -1 Added although its not in the paper. But else everything would be negative.
-				edgeLength = (-1) * (2 * Math::Sin(p_/2)) / Kmax;
+				//edgeLength = abs((2 * Math::Sin(p_/2)) / Kmax);
+				edgeLength = (2 * Math::Sin(p_/2)) / Kmax;
 			} else {
 				edgeLength = std::numeric_limits<float>::infinity();
 			}
@@ -147,12 +141,12 @@ GuidanceField::GuidanceField(const ShardFileParser::Ptr& sfp, Surface::Ptr s, fl
 				for (int counter = 1; counter <= NumberOfDebugColorLevels; counter++){
 
 					if(edgeLength < counter * maxTriangleLength_ / NumberOfDebugColorLevels){
-						//it->debugColor = Vector4f(1.0f - ((float)counter/(float)NumberOfDebugColorLevels), 0.0f, ((float)counter/(float)NumberOfDebugColorLevels), 1.0f);
-						it->debugColor = Vector4f((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, 1);
+						it->debugColor = Vector4f(1.0f - ((float)counter/(float)NumberOfDebugColorLevels), ((float)counter/(float)NumberOfDebugColorLevels), 0.0f, 1.0f);
 						break;
 					}
 				}
 				it->idealEdgeLength = edgeLength;
+
 			} else {
 				it->debugColor = Vector4f(1.0f, 1.0f, 1.0f, 1.0f);
 				it->idealEdgeLength = maxTriangleLength_;
@@ -192,9 +186,6 @@ GuidanceField::GuidanceField(const ShardFileParser::Ptr& sfp, Surface::Ptr s, fl
 										return false;
 									}
 								};
-
-		sampleAdaptivityRange_ = 0.2f;
-
 		Log::Debug("GuidanceField", "Completed octree calculation!");
 	}
 
@@ -206,18 +197,60 @@ std::vector<GuidanceFieldSample> GuidanceField::GetSamples() const {
 	return samples_;
 }
 
+float GuidanceField::G(const GuidanceFieldSample s, const Vector3f x){
+	return ((1 - (1 / n_)) * Length(x - s.position)) + (1 / n_) * s.idealEdgeLength;
+}
 
-GuidanceFieldSample GuidanceField::Evaluate(Vector3f pos){
+
+// Schreiner 4.18
+float GuidanceField::Evaluate(const Vector3f pos){
+	float y = std::numeric_limits<float>::infinity();
+	int current = 0;
 	std::vector<GuidanceFieldSample> samples;
-	octree_.Traverse(getSamplesByDistance_, pos, sampleAdaptivityRange_, samples);
+
+	octree_.Traverse(getSamplesByDistance_, pos, guidanceFieldEvaluationrange_, samples);
 
 	// Check if no samples were found
 	if(samples.empty())
 	{
-		return GuidanceFieldSample();
+		return maxTriangleLength_;
 	}
-	// Else return the lowest ideal edge length
-	return *(std::min_element(samples.begin(), samples.begin() + samples.size(), [] (const GuidanceFieldSample s1, const GuidanceFieldSample s2) {
-		return s1.idealEdgeLength < s2.idealEdgeLength;
-	}));
+
+	// Sort found samples by distance
+	std::sort(samples.begin(), samples.end(), [&pos] (const GuidanceFieldSample s1, const GuidanceFieldSample s2) -> bool {
+		return LengthSquared(s1.position - pos) < LengthSquared(s2.position - pos);
+	});
+
+	do {
+		y = Min(y, G(samples[current], pos));
+		current++;
+	} while (current < samples.size() &&
+		Length(samples[current-1].position - pos) <= (y / (1 - (1 / n_))));
+
+	return y;
 }
+
+/*
+float GuidanceField::Evaluate(const Vector3f pos){
+	std::vector<GuidanceFieldSample> samples;
+
+	octree_.Traverse(getSamplesByDistance_, pos, guidanceFieldEvaluationrange_, samples);
+
+	// Check if no samples were found
+	if(samples.empty())
+	{
+		return maxTriangleLength_;
+	}
+
+	// Else find he sample with the lowest gs(x)
+	GuidanceFieldSample sample =  *(std::min_element(samples.begin(), samples.begin() + samples.size(), [&pos, this] (const GuidanceFieldSample s1, const GuidanceFieldSample s2) -> bool {
+		// Evaluate Gs(x) for all the found samples, return the minimum
+		// return s1.idealEdgeLength < s2.idealEdgeLength;
+		float GsX1 = G(s1, pos);
+		float GsX2 = G(s2, pos);
+		return GsX1 < GsX2;
+	}));
+
+	return G(sample, pos);
+}
+*/
