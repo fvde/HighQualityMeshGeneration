@@ -45,7 +45,7 @@ public:
 	int getBorderSize() const;
 
 private:
-	void creatOwnVolumeFile();
+	void creatOwnVolumeFile(const String& volumeName);
 
 private:
 	String volumeName_;

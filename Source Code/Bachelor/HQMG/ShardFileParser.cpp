@@ -8,11 +8,12 @@ ShardFileParser::ShardFileParser(const String& volumeName, float isoValue)
 	isoValue_(isoValue){
 
 		// Open the shardfile
-		//creatOwnVolumeFile();
-		volume_.Open("smallSphere.nvf", true);
+		volumeName_ = "smallSphere.nvf";
+		//volume_.Open("smallSphere.nvf", true);
 		//volume_.Open("soldier-64.nvf", true);
 		//volume_.Open("smallCube.nvf", true);
-		//volume_.Open (volumeName_, true);
+		creatOwnVolumeFile(volumeName_);
+		volume_.Open (volumeName_, true);
 		const String layerName = "Density";
 		const bool isUIntVolume = false;
 
@@ -79,13 +80,13 @@ int ShardFileParser::getBorderSize() const {
 }
 
 
-void ShardFileParser::creatOwnVolumeFile(){
-int volumeSize = 8;
+void ShardFileParser::creatOwnVolumeFile(const String& volumeName){
+int volumeSize = 4;
 int volumeBorderSize = 0;
 const String layerName = "Density";
 
 auto volume = Volume::FileBlockStorage ();
-volume.Create ("smallCube.nvf");
+volume.Create (volumeName);
 
 Volume::FileBlockStorage::Metadata fileMetadata;
 fileMetadata.blockSize = volumeSize;
@@ -115,23 +116,24 @@ const Vector3f center (volumeSize / 2.0f, volumeSize / 2.0f, volumeSize / 2.0f);
 
 // Fill the volume
 // 1) Sphere
-/*
+
 while (it != end){
 	const float distance = Length (center - it.ToVector ().Cast<float> ()) / (volumeSize / 2.0f);
 	volumeData[l(it.X() + volumeBorderSize, it.Y() + volumeBorderSize, it.Z() + volumeBorderSize)] = 1 - Math::Clamp (distance, 0.0f, 1.0f);
 	++it;
 }
 
+/*
 // 2) Slice of a sphere
 while (it != end){
 	const float distance = Length (center - it.ToVector ().Cast<float> ()) / (volumeSize / 2.0f);
-	if (it.Y()== 2) {
+	if (it.Y()== volumeSize / 2 || it.Y()== (volumeSize / 2) + 1) {
 		volumeData[l(it.X() + volumeBorderSize, it.Y() + volumeBorderSize, it.Z() + volumeBorderSize)] = 1 - Math::Clamp (distance, 0.0f, 1.0f);
 	}
 	++it;
 }
 */
-
+/*
 // 2) Cube
 while (it != end){
 	if ((abs(it.Y() - volumeSize) <= 2) && (abs(it.X() - volumeSize) <= 4) && (abs(it.Z() - volumeSize) <= 2)) {
@@ -139,6 +141,7 @@ while (it != end){
 	}
 	++it;
 }
+*/
 
 const Volume::IBlockStorage::Id id = { Vector3i (0, 0, 0), 0 };
 volume.AddBlock(layerName, id, ArrayRef<void>(volumeData.Get (), volumeData.GetSize ()));
