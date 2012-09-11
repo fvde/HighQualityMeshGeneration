@@ -46,7 +46,7 @@ SplineSurface::SplineSurface(const ShardFileParser::Ptr& sfp, float isovalue)
 	: sfp_(sfp),
 	isovalue_(isovalue){
 
-		Log::Debug("Surface", "Starting surface calculation...");
+		Log::Info("Surface", "Starting surface calculation...");
 	
 		// Default values for projection accuracy
 		approximationAccuracy_ = 0.02f;
@@ -76,7 +76,7 @@ SplineSurface::SplineSurface(const ShardFileParser::Ptr& sfp, float isovalue)
 			if (current % (totalNumberOfCells/10) == 0){
 				char buffer[200];
 				sprintf(buffer, "Calculating surface... (%i %% done)", (int)(100.0f * (current/(float)totalNumberOfCells)));
-				Log::Debug("Surface", buffer);
+				Log::Info("Surface", buffer);
 			}
 
 			// Find samples in a 4 x 4 area
@@ -102,7 +102,7 @@ SplineSurface::SplineSurface(const ShardFileParser::Ptr& sfp, float isovalue)
 			if(	*std::min_element(innerSamples.begin(), innerSamples.begin() + innerSamples.size()) <= isovalue_
 				&& *std::max_element(innerSamples.begin(), innerSamples.begin() + innerSamples.size()) >= isovalue_){
 				// Create a spline, in this case CatmullRom
-				splines_[layout_(it)] = CardinalSpline(0.2f, samples);
+					splines_[layout_(it)] = CatmullRomSpline(samples);
 				isoSurfaceSplines_.push_back(std::pair<Vector3i, Spline*>(it.ToVector(), &splines_[layout_(it)]));
 			} else {
 				splines_[layout_(it)] = EmptySpline();
@@ -112,7 +112,7 @@ SplineSurface::SplineSurface(const ShardFileParser::Ptr& sfp, float isovalue)
 			current++;
 		}
 
-		Log::Debug("Surface", "Surface calculation completed!");
+		Log::Info("Surface", "Surface calculation completed!");
 }
 
 float SplineSurface::Evaluate(float x, float y, float z) {
@@ -235,6 +235,74 @@ float SplineSurface::RaycastInDirection(float x, float y, float z, Direction d) 
 	} else {
 		return std::numeric_limits<float>::infinity();
 	}
+}
+
+bool SplineSurface::ProjectOnSurface(Vector3f& initialLocation, const Vector3f& projectionAxis, Vector3f& projectionLocation){
+	// Assume that the projection Axis is the normal!
+	
+	// Evaluate the iso surface at the position
+	float localIsovalue = Surface::Evaluate(initialLocation);
+	int stepCounter = 100;
+	float steplength = 0.05f;
+	bool startedInside;
+	bool crossedSurface = false;
+	// Now move towards the surface until we are close enough, use bounds
+	Vector3f outerBound;
+	Vector3f innerBound;
+	Vector3f nextPosition;
+
+	if (localIsovalue > isovalue_){
+		// Outside of the volume
+		outerBound = initialLocation;
+		startedInside = false;
+	} else {
+		// Inside of the volume
+		innerBound = initialLocation;
+		startedInside = true;
+	}
+
+	while (stepCounter > 0 && Length(outerBound - innerBound) > approximationAccuracy_){
+
+		// If we found the surface, use the middle of the bordwer elements
+		if (crossedSurface){
+			nextPosition = 0.5f * (innerBound + outerBound);
+		} else if (startedInside){
+			nextPosition = innerBound + (steplength * projectionAxis);
+		} else {
+			nextPosition = outerBound - (steplength * projectionAxis);
+		}
+
+		localIsovalue = Surface::Evaluate(nextPosition);
+
+		if (localIsovalue > isovalue_){
+			// Outside of the volume
+			outerBound = nextPosition;
+
+			// Check if we entered for the first time
+			if(!crossedSurface && startedInside){
+				crossedSurface = true;
+			}
+
+		} else {
+			// Inside of the volume
+			innerBound = nextPosition;
+
+			// Check if we entered for the first time
+			if(!crossedSurface && !startedInside){
+				crossedSurface = true;
+			}
+		}
+
+		stepCounter--;
+	}
+
+	if (stepCounter == 0){
+		return false;
+	} else {
+		projectionLocation = 0.5f * (innerBound + outerBound);
+	}
+
+	return true;
 }
 
 std::vector<std::pair<Vector3f, Spline*>> SplineSurface::GetSurfaceSplines() {

@@ -87,11 +87,12 @@ public:
 	void TriangulateShardFile(std::vector<Vector3f>& vertices, std::vector<Vector3f>& normals, std::vector<Vector4f>& colors, std::vector<uint32>& indices, int steps);
 	bool CheckFrontInterference(Vertex newVertex, Front::FrontListIterator& bestOrigin, Front::FrontListIterator& bestNeighbor, Front::FrontListIterator& bestIntersection, bool& interferenceTestFailed);
 	bool GrowVertex(Vertex& v1, Vertex& v2, Vertex& newVertex);
-	bool ProjectVertexOnSurface(Vertex& v);
+	bool ProjectVertexOnSurface(Vertex& v, const float& tolerance);
 	Triangle CreateTriangle(Vertex& v1, Vertex& v2, Vertex& v3);
 	Triangle CreateTriangle(Front& f);
 	bool GetIntersection(const MeshExtractor::Edge& e1, const MeshExtractor::Edge& e2, MeshExtractor::Intersection& intersection);
 	static bool AngleIsValid(const Vector2f& origin, const Vector2f& dest, const Vector2f& point);
+	std::vector<GuidanceFieldSample> GetSamples();
 
 private:
 	std::vector<MeshExtractor::Edge> GetEdgesInRange(const Vertex& v, const MeshExtractor::Edge& edgeCurrentPrevious);
@@ -131,6 +132,8 @@ public:
 	std::vector<Vector3f> Intersections;
 	std::vector<Vector3f> AdditionalDebugInfo;
 
+	float CurrentZAcceptance;
+
 private:
 	ShardFileParser::Ptr sfp_;
 	FrontManager frontManager_;
@@ -145,4 +148,5 @@ private:
 	float collisionZCoordinateAcceptance_;
 	bool debugMode_;
 	Vector4f meshColor_;
+	float projectionTolerance_;
 };

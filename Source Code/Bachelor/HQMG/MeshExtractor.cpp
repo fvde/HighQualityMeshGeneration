@@ -13,14 +13,20 @@ MeshExtractor::MeshExtractor(const ShardFileParser::Ptr& sfp, float isoValue, fl
 		debugTriangleCounter_ = debugMaxTriangleNumber_;
 		totalSteps_ = 0;
 		floatingPointPrecision_ = 0.0001f;
-		collisionZCoordinateAcceptance_ = 1.0f;
+		// TODO Adaptive z coodinate acceptance, taking into account local curvature
+		collisionZCoordinateAcceptance_ = 0.2f;
+		CurrentZAcceptance = collisionZCoordinateAcceptance_;
+		projectionTolerance_ = 0.25f;
 		debugMode_ = false;
 		meshColor_ = Vector4f(0.0f, 0.5f, 1.0f, 1.0f);
 	}
 
 void MeshExtractor::Setup(){	
 	// TODO:: Find more/better seeds
-	Vector3f seed = guidanceField_->GetSamples()[0].position;
+	int size = guidanceField_->GetSamples().size();
+	int seedNumber = ((float)rand() / RAND_MAX) * size;
+	seedNumber = Min(seedNumber, size - 1);
+	Vector3f seed = guidanceField_->GetSamples()[seedNumber].position;
 
 	// Find a starting front
 	GetFrontFromSeed(seed, frontManager_);
@@ -38,7 +44,7 @@ void MeshExtractor::TriangulateShardFile(std::vector<Vector3f>& vertices, std::v
 
 	char buffer[200];
 	sprintf(buffer, "Executing %i steps. Total number of steps is %i", steps, totalSteps_);
-	Log::Debug("Triangulator", buffer);
+	Log::Info("Triangulator", buffer);
 
 	// Vector for finished triangles
 	std::vector<Triangle> triangles;
@@ -82,12 +88,12 @@ void MeshExtractor::TriangulateShardFile(std::vector<Vector3f>& vertices, std::v
 		PostAttempt = v1.Position;
 
 		if (!GrowVertex(v1, v2, attemptVertex)){
-			Log::Debug("MeshExtractor", "Vertex creation failed!");
+			Log::Info("MeshExtractor", "Vertex creation failed!");
 			continue;
 		}
 
-		if (!ProjectVertexOnSurface(attemptVertex)){
-			Log::Debug("MeshExtractor", "Projection failed!");
+		if (!ProjectVertexOnSurface(attemptVertex, projectionTolerance_)){
+			Log::Info("MeshExtractor", "Projection failed!");
 			continue;
 		}
 
@@ -122,7 +128,7 @@ void MeshExtractor::TriangulateShardFile(std::vector<Vector3f>& vertices, std::v
 		else 
 		{
 			if (testFailed){
-				Log::Debug("MeshExtractor", "Front interference test was not able to determine a viable intersection!");
+				Log::Info("MeshExtractor", "Front interference test was not able to determine a viable intersection!");
 				continue;
 			}
 
@@ -133,7 +139,7 @@ void MeshExtractor::TriangulateShardFile(std::vector<Vector3f>& vertices, std::v
 				// Merge fronts ( -> Removes a front)
 
 				if (frontManager_[bestIntersection->front].Size() <= 3){
-					Log::Debug("MeshExtractor", "Didn't merge, because the other front only contains 3 elements!");
+					Log::Info("MeshExtractor", "Didn't merge, because the other front only contains 3 elements!");
 					continue;
 				}
 				currentFront.Merge(bestOrigin, bestIntersection, frontManager_);
@@ -143,7 +149,7 @@ void MeshExtractor::TriangulateShardFile(std::vector<Vector3f>& vertices, std::v
 
 	char buffer2[200];
 	sprintf(buffer2, "Steps completed. Generated %i triangles.", triangles.size());
-	Log::Debug("Triangulator", buffer2);
+	Log::Info("Triangulator", buffer2);
 
 	// Debugging
 	ParseFrontManager();
@@ -236,12 +242,17 @@ bool MeshExtractor::GrowVertex(Vertex& v1, Vertex& v2, Vertex& vNew)
 	// Set the position
 	vNew.Position = v1.Position + (edgeDir * a) + (vertexDir * height);
 
+	// We need the edges normal for projection, this is NOT the final normal of the vertex!
+	vNew.Normal = edgeNormal;
+
 	return true;
 }
 
-bool MeshExtractor::ProjectVertexOnSurface(Vertex& v){
+bool MeshExtractor::ProjectVertexOnSurface(Vertex& v, const float& tolerance){
+	
 	// TODO Projection in direction of the normal of v! For now attempt all directions and pick the closest result. :/
 	std::vector<Vector3f> projections;
+	Vector3f originalPosition = v.Position;
 
 	// Raycast in each Direction once
 	for (int direction = 0; direction <= Surface::Direction::Z; ++direction){	
@@ -267,6 +278,14 @@ bool MeshExtractor::ProjectVertexOnSurface(Vertex& v){
 		}
 	}
 
+	// Additionally to Newton use another projection operator, then pick the best result
+	Vector3f newPosition;
+	bool success = surface_->ProjectOnSurface(v.Position, v.Normal, newPosition);
+
+	if (success){
+		projections.push_back(newPosition);
+	}
+
 	if(projections.empty()){
 		return false;
 	}
@@ -278,6 +297,11 @@ bool MeshExtractor::ProjectVertexOnSurface(Vertex& v){
 	// Check if the projection was successful
 	if (v.Position.X() != v.Position.X() || v.Position.Y() != v.Position.Y() || v.Position.Z() != v.Position.Z()){
 		// Undefined position!
+		return false;
+	}
+
+	// Check if the projected position is within reasonable distance
+	if (Length(v.Position - originalPosition) > tolerance){
 		return false;
 	}
 
@@ -665,7 +689,7 @@ bool MeshExtractor::FindBestIntersection(const std::vector<MeshExtractor::Inters
 			// Find the vertex of the edge that is not v1 or v2 and closest to the intersection
 			if (!FindBestIntersectionElement((*it), originalEdge, bestIntersection)){
 				// The intersection was not useable! This is critical.
-				Log::Debug("MeshExtractor", "No intersection element was viable!");
+				Log::Info("MeshExtractor", "No intersection element was viable!");
 				continue;
 			} else {
 				intersectionFound = true;
@@ -946,7 +970,11 @@ void MeshExtractor::DisplayProgress(const int& current, const int& total){
 		if (current % tenPercent == 0){
 			char buffer[200];
 			sprintf(buffer, "Triangulating... (%i %% done)", (int)(100.0f * (1 - current/(float)total)));
-			Log::Debug("Triangulator", buffer);
+			Log::Info("Triangulator", buffer);
 		}
 	}
+}
+
+std::vector<GuidanceFieldSample> MeshExtractor::GetSamples(){
+	return guidanceField_->GetSamples();
 }

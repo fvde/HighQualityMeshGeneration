@@ -8,15 +8,16 @@ GuidanceField::GuidanceField(const ShardFileParser::Ptr& sfp, Surface::Ptr s, fl
 		n_(n),
 		surface_(s){
 
-		Log::Debug("GuidanceField", "Looking for sample points on the surface...");
+		Log::Info("GuidanceField", "Looking for sample points on the surface...");
 
 		randomSeed_ = 1;
 		srand(randomSeed_);
 		//srand(time(NULL));
 
-		samplingDensity_ = 50;
+		samplingDensity_ = 25;
 		maxTriangleLength_ = 1.0f;
 		guidanceFieldEvaluationrange_ = 1.0f;
+		Vector3f projectionPosition;
 
 		layout_ = MemoryLayout3D(sfp->getVolumeWidth(), sfp->getVolumeHeight(), sfp->getVolumeDepth());
 
@@ -34,18 +35,30 @@ GuidanceField::GuidanceField(const ShardFileParser::Ptr& sfp, Surface::Ptr s, fl
 		surface_->SetApproximationSteps(20);
 
 		std::vector<std::pair<Vector3f, Spline*>> surfaceSplines = surface_->GetSurfaceSplines();
+		int totalNumberOfCells = surfaceSplines.size();
+		int current = 0;
 		for (auto it = surfaceSplines.begin(); it !=  surfaceSplines.end(); it++){
 			int i = samplingDensity_;
+			current++;
+
+			// Give debug feedback
+			if (current % (totalNumberOfCells/10) == 0){
+				char buffer[200];
+				sprintf(buffer, "Calculating samples... (%i %% done)", (int)(100.0f * (current/(float)totalNumberOfCells)));
+				Log::Info("GuidanceField", buffer);
+			}
+
+
 			while (i > 0) {
 				i--;
+				
+				// Find a position to project from onto the surface
+				float x = it->first.X() + (float)rand() / RAND_MAX;
+				float y = it->first.Y() + (float)rand() / RAND_MAX;
+				float z = it->first.Z() + (float)rand() / RAND_MAX;
+				
 				// Raycast in each Direction once
 				for (int direction = 0; direction <= Surface::Direction::Z; ++direction){	
-
-					// Find a position to project from onto the surface
-					float x = it->first.X() + (float)rand() / RAND_MAX;
-					float y = it->first.Y() + (float)rand() / RAND_MAX;
-					float z = it->first.Z() + (float)rand() / RAND_MAX;
-
 					// Project
 					float projectedPosition = surface_->RaycastInDirection(x, y, z, (Surface::Direction)direction);
 
@@ -61,15 +74,26 @@ GuidanceField::GuidanceField(const ShardFileParser::Ptr& sfp, Surface::Ptr s, fl
 						samples_.push_back(sample);
 					}
 				}
+				
+
+				// Additionally use another projection operator
+				Vector3f pos = Vector3f(x, y, z);
+				bool success = surface_->ProjectOnSurface(pos, surface_->GetNormal(pos), projectionPosition);
+
+				if (success){
+					sample.position = projectionPosition;
+					sample.isovalue = surface_->Evaluate(sample.position);
+					samples_.push_back(sample);
+				}
 			}
 		}
 
 		char buffer[100];
 		sprintf(buffer, "Search completed. Found %i samples.", samples_.size());
-		Log::Debug("GuidanceField", buffer);
+		Log::Info("GuidanceField", buffer);
 		
 		// Now calculate the tensor at each sample position and calculate the ideal edge length with it
-		Log::Debug("GuidanceField", "Calculating surface tensors for the samples...");
+		Log::Info("GuidanceField", "Calculating surface tensors for the samples...");
 
 		for (auto it = samples_.begin(); it != samples_.end(); it++){
 			// Calculate g
@@ -153,9 +177,9 @@ GuidanceField::GuidanceField(const ShardFileParser::Ptr& sfp, Surface::Ptr s, fl
 			}
 		}
 
-		Log::Debug("GuidanceField", "Completed surface tensor calculation!");
+		Log::Info("GuidanceField", "Completed surface tensor calculation!");
 
-		Log::Debug("GuidanceField", "Calculating octree for the samples...");
+		Log::Info("GuidanceField", "Calculating octree for the samples...");
 
 		// Create an octree to be able to traverse the samples efficiently
 		std::vector<niven::Vector3f> boundsOffsetTable(8);
@@ -186,7 +210,7 @@ GuidanceField::GuidanceField(const ShardFileParser::Ptr& sfp, Surface::Ptr s, fl
 										return false;
 									}
 								};
-		Log::Debug("GuidanceField", "Completed octree calculation!");
+		Log::Info("GuidanceField", "Completed octree calculation!");
 	}
 
 float GuidanceField::GetDensity(float x, float y, float z) const {

@@ -60,12 +60,14 @@ class HQMG2DApplication : public BaseApplication3D {
 	CMD_1,
 	CMD_2,
 	CMD_3,
+	CMD_4
 	};
 
 	enum DrawMode {
 		Mesh = 1,
 		Intersections = 2,
 		Wireframe = 3,
+		MeshAndSamples = 4,
 		All = 0
 	};
 
@@ -132,6 +134,9 @@ private:
 		commandMapper_.RegisterCommand (CMD_3, KeyBinding (KeyCodes::Key_3,
 			KeyBindingActivator::Pressed));
 
+		commandMapper_.RegisterCommand (CMD_4, KeyBinding (KeyCodes::Key_4,
+			KeyBindingActivator::Pressed));
+
 		camera_->GetFrustum().SetPerspectiveProjection(
 			Degree (75.0f),
 			renderWindow_->GetAspectRatio(),
@@ -146,9 +151,9 @@ private:
 		srand(time(NULL));
 		visibleTriangleCounter_ = 1;
 		drawMode_ = DrawMode::All;
+		//stepStart_ = 13500;
 		stepStart_ = 1;
-		//stepStart_ = 1;
-		stepIntervall_ = 500;
+		stepIntervall_ = 1;
 
 		effectManager_.Initialize(renderSystem_.get(), &effectLoader_);
 		
@@ -162,7 +167,7 @@ private:
 
 		ShardFileParser::Ptr sfp = cpp0x::make_shared<ShardFileParser> (volumeName_, isoValue_);
 
-		Log::Debug("Triangulator", "Preparing triangulation...");
+		Log::Info("Triangulator", "Preparing triangulation...");
 
 		// Relative size of the triangles
 		float triangleApproximationQuality = 0.3f;
@@ -172,7 +177,7 @@ private:
 
 		me_ = MeshExtractor(sfp, isoValue_, triangleApproximationQuality, triangleAdaptionRate);
 		me_.Setup();
-		Log::Debug("Triangulator", "Ready for triangulation!");
+		Log::Info("Triangulator", "Ready for triangulation!");
 
 
 		indexBuffer_ = renderSystem_->Wrap (renderSystem_->CreateIndexBuffer (
@@ -208,6 +213,8 @@ private:
 		debugColors_[13] = Color3f(0, 0, 1.0f);
 		debugColors_[14] = Color3f(0, 1.0f, 0);
 		debugColors_[15] = Color3f(1.0f, 1.0f, 0);
+		// 16: zAcceptance circle
+		debugColors_[16] = Color3f(0.0f, 1.0f, 0);
 
 		if (stepStart_> 0){
 			ExecuteNextStep(stepStart_);
@@ -268,6 +275,13 @@ private:
 			AddWireFrame();
 			break;
 			}
+		case CMD_4:{
+			drawMode_ = DrawMode::MeshAndSamples;
+			dru_.Clear();
+			AddMeshDebugInformation();
+			AddSamples();
+			break;
+			}
 		}
 	}
 
@@ -324,6 +338,11 @@ private:
 				AddWireFrame();
 				break;
 				}
+			case DrawMode::MeshAndSamples:{
+				AddMeshDebugInformation();
+				AddSamples();
+				break;
+				}
 		}
 
 		for (auto it = me_.AdditionalDebugInfo.begin(); it != me_.AdditionalDebugInfo.end(); it++){
@@ -349,6 +368,8 @@ private:
 		for (auto it = me_.Intersections.begin(); it != me_.Intersections.end(); it++){
 			dru_.AddCross(Vector3f(it->X(), it->Y(), 0), debugColors_[13], 0.01f);
 		}
+
+		//dru_.AddSphere(me_.TransformedPreAttempt, me_.CurrentZAcceptance, debugColors_[16]);
 	}
 
 	void AddWireFrame() {
@@ -356,6 +377,14 @@ private:
 			dru_.AddLine(vertices_[it], vertices_[it + 1], Color3f(0.0f, 1.0f, 1.0f));
 			dru_.AddLine(vertices_[it + 1], vertices_[it + 2], Color3f(0.0f, 1.0f, 1.0f));
 			dru_.AddLine(vertices_[it + 2], vertices_[it], Color3f(0.0f, 1.0f, 1.0f));
+		}
+	}
+
+	void AddSamples() {
+		std::vector<GuidanceFieldSample> samples = me_.GetSamples();
+
+		for (auto it = samples.begin(); it != samples.end(); it++){
+			dru_.AddCross(it->position, Color3f(it->debugColor), 0.01f);
 		}
 	}
 
@@ -387,6 +416,8 @@ private:
 		dru_.AddCross(me_.PostOrigin, debugColors_[10], 0.02f);
 		dru_.AddCross(me_.PostAttempt, debugColors_[10], 0.02f);
 		dru_.AddCross(me_.PostNeighbor, debugColors_[10], 0.02f);
+
+		//dru_.AddSphere(me_.PreAttempt, me_.CurrentZAcceptance, debugColors_[16]);
 	}
 
 	void ShutdownImpl() 

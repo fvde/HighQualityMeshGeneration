@@ -30,6 +30,7 @@ public:
 	virtual float Evaluate(float x, float y, float z) = 0;
 	float Evaluate(Vector3f pos);
 	virtual float RaycastInDirection(float x, float y, float z, Direction d) = 0;
+	virtual bool ProjectOnSurface(Vector3f& initialLocation, const Vector3f& projectionAxis, Vector3f& projectionLocation) = 0;
 	virtual float EvaluateFirstOrderXDerivative(float x, float y, float z) = 0;
 	virtual float EvaluateFirstOrderYDerivative(float x, float y, float z) = 0;
 	virtual float EvaluateFirstOrderZDerivative(float x, float y, float z) = 0;
@@ -62,6 +63,7 @@ class SplineSurface : public Surface {
 		SplineSurface(const ShardFileParser::Ptr& sfp, float isovalue);
 		float Evaluate(float x, float y, float z);
 		float RaycastInDirection(float x, float y, float z, Direction d);
+		bool ProjectOnSurface(Vector3f& initialLocation, const Vector3f& projectionAxis, Vector3f& projectionLocation);
 		float EvaluateFirstOrderXDerivative(float x, float y, float z);
 		float EvaluateFirstOrderYDerivative(float x, float y, float z);
 		float EvaluateFirstOrderZDerivative(float x, float y, float z);
